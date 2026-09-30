@@ -1,6 +1,6 @@
 # What this is
 
-watchpage is a small HTTP watcher. You give it a page URL and something to watch for. Cron runs it once a minute. When the watch condition is met, it sends one Twilio SMS to each number in `TO_NUMBERS`, records the send, and comments out its own cron line.
+watchpage is a small HTTP watcher. You give it a page URL and something to watch for. Cron runs it once a minute. When the watch condition is met, it sends one Twilio SMS to each number in that config's `to_numbers`, records the send, and comments out its own cron line.
 
 The watch lives in a JSON file passed as `--config`. Twilio credentials stay in `.env`.
 

@@ -1,6 +1,7 @@
 {
   "name": "christmas-town",
   "url": "https://www.conservationhalton.ca/christmas-town/",
+  "to_numbers": ["+14165550101", "+14165550102"],
   "message": "Christmas Town tickets may be on sale: {url}",
   "must_contain": "christmas town",
   "cron_marker": "christmas-town-watch",
@@ -8,6 +9,6 @@
   "watch": {
     "kind": "text",
     "value": "will be available",
-    "alertwhen": "absent"
+    "alert_when": "absent"
   }
 }

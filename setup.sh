@@ -59,4 +59,4 @@ else
 fi
 
 echo "Ready. Run the watcher with:"
-echo "  .venv/bin/python watch.py --config config.json"
+echo "  .venv/bin/python watchpage.py --config config.json"

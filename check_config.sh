@@ -3,4 +3,4 @@
 # Exits 1 when any warning is printed.
 set -euo pipefail
 cd "$(dirname "$0")"
-python3 -c 'import sys, watch; sys.exit(1 if watch.warn_config() else 0)'
+python3 -c 'import sys, watchpage; sys.exit(1 if watchpage.warn_config() else 0)'

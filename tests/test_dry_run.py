@@ -8,7 +8,7 @@ from io import StringIO
 from pathlib import Path
 from contextlib import redirect_stdout
 
-import watch
+import watchpage
 
 
 class DryRunTest(unittest.TestCase):
@@ -22,6 +22,7 @@ class DryRunTest(unittest.TestCase):
                     "name": "christmas-town",
                     "url": "https://www.conservationhalton.ca/christmas-town/",
                     "message": "Christmas Town tickets may be on sale: {url}",
+                    "to_numbers": ["+14165550101"],
                     "must_contain": "christmas town",
                     "state_file": str(self.state_path),
                     "watch": {
@@ -33,15 +34,15 @@ class DryRunTest(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        self.saved_env = {key: os.environ.get(key) for key in watch.REQUIRED_SETTINGS}
-        for key in watch.REQUIRED_SETTINGS:
+        self.saved_env = {key: os.environ.get(key) for key in watchpage.REQUIRED_SETTINGS}
+        for key in watchpage.REQUIRED_SETTINGS:
             os.environ.pop(key, None)
-        self.saved_env_path = watch.ENV_PATH
-        self.saved_state_path = watch.STATE_PATH
-        watch.ENV_PATH = self.tmp / "missing.env"
-        self.original_fetch = watch.fetch_page
-        self.original_sms = watch.send_sms
-        self.original_run = watch.subprocess.run
+        self.saved_env_path = watchpage.ENV_PATH
+        self.saved_state_path = watchpage.STATE_PATH
+        watchpage.ENV_PATH = self.tmp / "missing.env"
+        self.original_fetch = watchpage.fetch_page
+        self.original_sms = watchpage.send_sms
+        self.original_run = watchpage.subprocess.run
         self.page = None
         self.problem = "fetch failed"
 
@@ -56,16 +57,16 @@ class DryRunTest(unittest.TestCase):
         def reject_cron(*_args, **_kwargs):
             raise AssertionError("dry run must not edit crontab")
 
-        watch.fetch_page = fake_fetch
-        watch.send_sms = reject_sms
-        watch.subprocess.run = reject_cron
+        watchpage.fetch_page = fake_fetch
+        watchpage.send_sms = reject_sms
+        watchpage.subprocess.run = reject_cron
 
     def tearDown(self):
-        watch.ENV_PATH = self.saved_env_path
-        watch.STATE_PATH = self.saved_state_path
-        watch.fetch_page = self.original_fetch
-        watch.send_sms = self.original_sms
-        watch.subprocess.run = self.original_run
+        watchpage.ENV_PATH = self.saved_env_path
+        watchpage.STATE_PATH = self.saved_state_path
+        watchpage.fetch_page = self.original_fetch
+        watchpage.send_sms = self.original_sms
+        watchpage.subprocess.run = self.original_run
         for key, value in self.saved_env.items():
             if value is None:
                 os.environ.pop(key, None)
@@ -75,7 +76,7 @@ class DryRunTest(unittest.TestCase):
     def run_dry(self):
         stdout = StringIO()
         with redirect_stdout(stdout):
-            code = watch.main(["--config", str(self.config_path), "--dry-run"])
+            code = watchpage.main(["--config", str(self.config_path), "--dry-run"])
         self.assertFalse(self.state_path.exists())
         return code, stdout.getvalue()
 
