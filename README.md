@@ -1,8 +1,20 @@
 # watchpage
 
-A Python 3 script for an Ubuntu server. Once a minute it fetches a page from a JSON config. While the watch condition is not met, it waits. When the condition is met, it sends one Twilio SMS to each configured number, records the send, and comments out its own cron job. Later runs exit immediately and do not fetch the site again.
+watchpage watches a website and texts you when the page changes in the way you care about.
 
-Text watches use the Python standard library only. A CSS watch needs BeautifulSoup. `./setup.sh` creates a `.venv` in this directory and installs whatever is missing from `requirements.txt`. It does not need root.
+A ticket page might say "will be available" for weeks, then quietly switch to on sale. A product page might grow an Add to cart button, or drop a sold-out notice. Refreshing that page by hand is easy to forget. watchpage checks it once a minute from a Linux machine. While the page still looks the way it does now, it waits and sends nothing. When the phrase or HTML element you named is present or gone, it sends one SMS to each phone number for that watch, remembers who was texted, and turns its own scheduled job off. Later runs exit without requesting the site again.
+
+If the site stops answering, it can text one outage number after 10 failed checks, then stay quiet until a check succeeds.
+
+## How alerts are sent
+
+When a watch is triggered, or when a page has been unreachable for 10 checks, watchpage sends an SMS through [Twilio](https://www.twilio.com/). Twilio is the service that delivers the text from a phone number you control to the numbers in that watch. Each recipient gets one message. A retry texts only numbers that have not already been sent.
+
+## Dependencies
+
+watchpage runs on Linux with Python 3.10 or newer and cron. Text watches use the Python standard library only. A CSS watch needs BeautifulSoup.
+
+`./setup.sh` creates a `.venv` in this directory and installs whatever is missing from `requirements.txt`. It does not need root. If `python3 -m venv` is missing, install your distribution's venv package first (on Debian and Ubuntu that package is `python3-venv`).
 
 ```bash
 ./setup.sh
@@ -10,15 +22,11 @@ Text watches use the Python standard library only. A CSS watch needs BeautifulSo
 
 Run the watcher with `.venv/bin/python` after that, including in cron, so a CSS watch can import BeautifulSoup.
 
-## Twilio
-
-1. Create a [Twilio](https://www.twilio.com/) account and buy a phone number (or use a trial number).
-2. Copy the Account SID and Auth Token from the Twilio console.
-3. Trial accounts can text only numbers you verify in the console, and Twilio prefixes the message with a trial notice. A paid send is a few cents per recipient. This script sends once per number.
-
 ## Configure Twilio
 
-On the server, from this directory:
+Create a Twilio account and buy a phone number, or use a trial number. Copy the Account SID and Auth Token from the Twilio console. Trial accounts can text only numbers you verify in the console, and Twilio prefixes the message with a trial notice. A paid send is a few cents per recipient.
+
+From this directory on the machine that will run the checks:
 
 ```bash
 cp config.example.env .env
@@ -64,16 +72,16 @@ python3 watchpage.py --config config.json
 
 ### Text, alert when the phrase is gone
 
-This is [config.example.json](config.example.json). It texts when a normal Christmas Town page no longer contains `will be available`. `must_contain` skips a page that is not Christmas Town, so a wrong page does not look like a hit. `cron_marker` and `state_file` keep the job and state file that are already on the server.
+Texts when a normal tickets page no longer contains `will be available`. `must_contain` skips a page that does not mention the event, so a wrong or empty page does not look like a hit.
 
 ```json
 {
-  "name": "christmas-town",
-  "url": "https://www.conservationhalton.ca/christmas-town/",
+  "name": "summer-tickets",
+  "url": "https://example.com/tickets",
   "to_numbers": ["+14165550101", "+14165550102"],
-  "message": "Christmas Town tickets may be on sale: {url}",
-  "must_contain": "christmas town",
-  "cron_marker": "christmas-town-watch",
+  "message": "Tickets may be on sale: {url}",
+  "must_contain": "summer concert",
+  "cron_marker": "watchpage:summer-tickets",
   "state_file": "state.json",
   "watch": {
     "kind": "text",
@@ -139,21 +147,21 @@ Texts when `.sold-out` no longer matches.
 
 ## Install the cron job
 
-On the server, run `crontab -e` and add a line for each config. The comment at the end must match that config's `cron_marker`. After the texts go out, the script comments out that line. The line stays in the file. The marker is read from the comment, so a directory path that happens to contain the same words does not disable a different watch.
+Run `crontab -e` and add a line for each config. Replace the paths below with the directory where you keep watchpage. The comment at the end must match that config's `cron_marker`. After the texts go out, the script comments out that line. The line stays in the file. The marker is read from the comment, so a directory path that happens to contain the same words does not disable a different watch.
 
-For the Christmas Town example, the marker is `christmas-town-watch`:
+For the tickets example, the marker is `watchpage:summer-tickets`. Use the directory where you installed watchpage in place of `/path/to/watchpage`:
 
 ```cron
-* * * * * flock -n /home/cstigas/christmas-town-watch/watch.lock /home/cstigas/christmas-town-watch/.venv/bin/python /home/cstigas/christmas-town-watch/watchpage.py --config /home/cstigas/christmas-town-watch/config.json >> /home/cstigas/christmas-town-watch/watch.log 2>&1 # christmas-town-watch
+* * * * * flock -n /path/to/watchpage/watch.lock /path/to/watchpage/.venv/bin/python /path/to/watchpage/watchpage.py --config /path/to/watchpage/config.json >> /path/to/watchpage/watch.log 2>&1 # watchpage:summer-tickets
 ```
 
 Another watch uses its own lock, log, config, and marker. With the default marker for `name` `shop-cart`:
 
 ```cron
-* * * * * flock -n /home/cstigas/christmas-town-watch/shop-cart.lock /home/cstigas/christmas-town-watch/.venv/bin/python /home/cstigas/christmas-town-watch/watchpage.py --config /home/cstigas/christmas-town-watch/shop-cart.json >> /home/cstigas/christmas-town-watch/shop-cart.log 2>&1 # watchpage:shop-cart
+* * * * * flock -n /path/to/watchpage/shop-cart.lock /path/to/watchpage/.venv/bin/python /path/to/watchpage/watchpage.py --config /path/to/watchpage/shop-cart.json >> /path/to/watchpage/shop-cart.log 2>&1 # watchpage:shop-cart
 ```
 
-`flock` skips a run if the previous one is still going. Confirm the job with `crontab -l`.
+`flock` (from util-linux) skips a run if the previous one is still going. Confirm the job with `crontab -l`.
 
 ## See whether the watch is triggered
 
