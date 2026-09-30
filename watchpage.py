@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import http.cookiejar
 import json
 import os
 import re
@@ -21,6 +22,8 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+
+import cookie_import
 
 ROOT = Path(__file__).resolve().parent
 ENV_PATH = ROOT / ".env"
@@ -182,7 +185,9 @@ def parse_to_numbers(path: Path, data: dict) -> list[str]:
     return recipients
 
 
-def load_watch_config(path: Path) -> dict[str, object]:
+def load_watch_config(
+    path: Path, *, require_cookies_file: bool = True
+) -> dict[str, object]:
     """Load the page URL and watch condition from a JSON file."""
     if not path.is_file():
         config_error(path, "file not found")
@@ -245,6 +250,19 @@ def load_watch_config(path: Path) -> dict[str, object]:
     else:
         state_file = ROOT / "state" / f"{name}.json"
 
+    cookies_file = None
+    if "cookies_file" in data:
+        cookies_raw = require_text_key(path, data, "cookies_file")
+        cookies_file = Path(cookies_raw)
+        if not cookies_file.is_absolute():
+            cookies_file = ROOT / cookies_file
+        if require_cookies_file and not cookies_file.is_file():
+            config_error(path, f"cookies file not found: {cookies_file}")
+
+    user_agent = None
+    if "user_agent" in data:
+        user_agent = require_text_key(path, data, "user_agent")
+
     render_javascript = False
     if "render_javascript" in data:
         raw_render = data["render_javascript"]
@@ -261,6 +279,8 @@ def load_watch_config(path: Path) -> dict[str, object]:
         "must_contain": must_contain,
         "cron_marker": cron_marker,
         "state_file": state_file,
+        "cookies_file": cookies_file,
+        "user_agent": user_agent,
         "render_javascript": render_javascript,
         "watch": {"kind": kind, "value": value, "alert_when": alert_when},
     }
@@ -443,15 +463,100 @@ def import_playwright():
     return sync_playwright, PlaywrightTimeout
 
 
-def render_page(url: str) -> tuple[str | None, str | None]:
+def load_cookie_jar(path: Path) -> http.cookiejar.MozillaCookieJar:
+    jar = http.cookiejar.MozillaCookieJar(str(path))
+    try:
+        jar.load(ignore_discard=True, ignore_expires=True)
+    except (http.cookiejar.LoadError, OSError) as exc:
+        raise SystemExit(f"Could not read cookies file {path.name}: {exc}") from exc
+    return jar
+
+
+def save_cookie_jar(jar: http.cookiejar.MozillaCookieJar) -> None:
+    if not jar.filename:
+        raise SystemExit("cookies file has no path")
+    path = Path(jar.filename)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    jar.save(ignore_discard=True, ignore_expires=False)
+    os.chmod(path, 0o600)
+
+
+def playwright_cookie_payload(
+    jar: http.cookiejar.CookieJar, url: str
+) -> list[dict[str, object]]:
+    request = urllib.request.Request(url)
+    policy = jar._policy
+    payload: list[dict[str, object]] = []
+    for cookie in jar:
+        if not policy.return_ok(cookie, request):
+            continue
+        item: dict[str, object] = {
+            "name": cookie.name,
+            "value": cookie.value or "",
+            "domain": cookie.domain,
+            "path": cookie.path,
+            "secure": bool(cookie.secure),
+            "httpOnly": cookie.has_nonstandard_attr("HTTPOnly"),
+        }
+        if cookie.expires is not None:
+            item["expires"] = int(cookie.expires)
+        payload.append(item)
+    return payload
+
+
+def store_playwright_cookies(jar: http.cookiejar.CookieJar, items: list[dict]) -> None:
+    for item in items:
+        name = item.get("name")
+        value = item.get("value")
+        host = item.get("domain")
+        if not isinstance(name, str) or not isinstance(value, str) or not isinstance(host, str):
+            continue
+        expires_raw = item.get("expires", -1)
+        expires = None
+        if isinstance(expires_raw, (int, float)) and not isinstance(expires_raw, bool):
+            if expires_raw >= 0:
+                expires = int(expires_raw)
+        jar.set_cookie(
+            cookie_import.make_cookie(
+                name=name,
+                value=value,
+                host=host,
+                path=str(item.get("path") or "/"),
+                secure=bool(item.get("secure")),
+                http_only=bool(item.get("httpOnly")),
+                expires=expires,
+            )
+        )
+
+
+def render_page(
+    url: str,
+    *,
+    user_agent: str | None = None,
+    jar: http.cookiejar.MozillaCookieJar | None = None,
+    save_cookies: bool = False,
+) -> tuple[str | None, str | None]:
     """Return the HTML after scripts run, using a headless browser."""
     sync_playwright, playwright_timeout = import_playwright()
+    agent = user_agent or USER_AGENT
     log("rendering page in a headless browser")
     try:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
             try:
-                page = browser.new_page(user_agent=USER_AGENT)
+                context = None
+                if jar is None:
+                    page = browser.new_page(user_agent=agent)
+                else:
+                    context = browser.new_context(user_agent=agent)
+                    payload = playwright_cookie_payload(jar, url)
+                    if payload:
+                        try:
+                            context.add_cookies(payload)
+                        except Exception:
+                            log("fetch failed: could not apply cookies")
+                            return None, "fetch failed"
+                    page = context.new_page()
                 response = page.goto(
                     url,
                     wait_until="load",
@@ -468,6 +573,14 @@ def render_page(url: str) -> tuple[str | None, str | None]:
                 except playwright_timeout:
                     pass
                 body = page.content()
+                if (
+                    save_cookies
+                    and jar is not None
+                    and context is not None
+                    and len(body) >= MIN_BODY_LENGTH
+                ):
+                    store_playwright_cookies(jar, context.cookies())
+                    save_cookie_jar(jar)
             finally:
                 browser.close()
     except SystemExit:
@@ -478,7 +591,10 @@ def render_page(url: str) -> tuple[str | None, str | None]:
             raise SystemExit(
                 "Headless Chromium is not installed. Run ./setup.sh and answer yes when asked about headless Chromium."
             ) from exc
-        log(f"fetch failed: {message}")
+        if jar is not None:
+            log(f"fetch failed: {type(exc).__name__}")
+        else:
+            log(f"fetch failed: {message}")
         return None, "fetch failed"
 
     if len(body) < MIN_BODY_LENGTH:
@@ -488,18 +604,36 @@ def render_page(url: str) -> tuple[str | None, str | None]:
 
 
 def fetch_page(
-    url: str, *, render_javascript: bool = False
+    url: str,
+    *,
+    render_javascript: bool = False,
+    cookies_file: Path | None = None,
+    user_agent: str | None = None,
+    save_cookies: bool = False,
 ) -> tuple[str | None, str | None]:
     """Return (body, None) or (None, reason)."""
+    agent = user_agent or USER_AGENT
+    jar = load_cookie_jar(Path(cookies_file)) if cookies_file else None
     if render_javascript:
-        return render_page(url)
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        return render_page(
+            url,
+            user_agent=agent,
+            jar=jar,
+            save_cookies=save_cookies and jar is not None,
+        )
+    request = urllib.request.Request(url, headers={"User-Agent": agent})
     try:
-        with urllib.request.urlopen(request, timeout=FETCH_TIMEOUT_SECONDS) as response:
+        if jar is None:
+            response_cm = urllib.request.urlopen(request, timeout=FETCH_TIMEOUT_SECONDS)
+        else:
+            opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+            response_cm = opener.open(request, timeout=FETCH_TIMEOUT_SECONDS)
+        with response_cm as response:
             status = response.status
             charset = response.headers.get_content_charset() or "utf-8"
             body = response.read().decode(charset, errors="replace")
     except urllib.error.HTTPError as exc:
+        exc.close()
         log(f"fetch failed: HTTP {exc.code}")
         return None, "fetch failed"
     except Exception as exc:
@@ -512,7 +646,23 @@ def fetch_page(
     if len(body) < MIN_BODY_LENGTH:
         log(f"page too short ({len(body)} bytes); skipping")
         return None, "page too short"
+    if save_cookies and jar is not None:
+        save_cookie_jar(jar)
     return body, None
+
+
+def fetch_configured_page(
+    config: dict[str, object], *, save_cookies: bool
+) -> tuple[str | None, str | None]:
+    cookies_file = config.get("cookies_file")
+    user_agent = config.get("user_agent")
+    return fetch_page(
+        str(config["page_url"]),
+        render_javascript=bool(config["render_javascript"]),
+        cookies_file=cookies_file if isinstance(cookies_file, Path) else None,
+        user_agent=str(user_agent) if user_agent else None,
+        save_cookies=save_cookies,
+    )
 
 
 def page_matches(body: str, watch: dict[str, str]) -> bool:
@@ -712,10 +862,7 @@ def send_pending(
 
 
 def run_dry(config: dict[str, object]) -> int:
-    body, problem = fetch_page(
-        str(config["page_url"]),
-        render_javascript=bool(config["render_javascript"]),
-    )
+    body, problem = fetch_configured_page(config, save_cookies=False)
     outcome, detail = assess(body, problem, config)
     if outcome == "not_checked":
         log(f"watch not checked: {detail}")
@@ -725,6 +872,23 @@ def run_dry(config: dict[str, object]) -> int:
         return 0
     log("watch not triggered")
     return 0
+
+
+def import_watch_cookies(config: dict[str, object], args: argparse.Namespace) -> int:
+    destination = config.get("cookies_file")
+    hint = None
+    if not isinstance(destination, Path):
+        destination = ROOT / "cookies" / f"{config['name']}.txt"
+        hint = destination.relative_to(ROOT).as_posix()
+    host = urllib.parse.urlparse(str(config["page_url"])).hostname or ""
+    return cookie_import.import_site_cookies(
+        destination=destination,
+        suggest_domain=host,
+        config_hint=hint,
+        browser=args.browser,
+        domain=args.domain,
+        profile=args.profile,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -739,7 +903,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Fetch the page and report whether the watch is triggered. Does not send texts or change state.",
+        help="Fetch the page and report whether the watch is triggered. Does not send texts, change state, or update cookies.",
+    )
+    parser.add_argument(
+        "--import-cookies",
+        action="store_true",
+        help="Copy cookies for one domain from one local browser into the watch cookie file. Does not fetch the page.",
+    )
+    parser.add_argument(
+        "--browser",
+        choices=cookie_import.BROWSERS,
+        help="Browser to import from. Required when there is no terminal.",
+    )
+    parser.add_argument(
+        "--domain",
+        help="Single domain to import, such as www.example.com. Required when there is no terminal.",
+    )
+    parser.add_argument(
+        "--profile",
+        help="Browser profile to import from. Required when that browser has several profiles and there is no terminal.",
     )
     parser.add_argument(
         "--test-sms",
@@ -757,6 +939,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Time out against a local hung server and send one outage text without saving state.",
     )
     args = parser.parse_args(argv)
+    if args.import_cookies and (
+        args.dry_run or args.test_sms or args.no_record or args.test_outage
+    ):
+        raise SystemExit(
+            "--import-cookies cannot be combined with --dry-run, --test-sms, --no-record, or --test-outage"
+        )
     if args.dry_run and (args.test_sms or args.no_record or args.test_outage):
         raise SystemExit("--dry-run cannot be combined with other test flags")
     if args.test_outage:
@@ -765,7 +953,12 @@ def main(argv: list[str] | None = None) -> int:
     if not args.config:
         parser.error("the following arguments are required: --config")
 
-    watch_config = load_watch_config(Path(args.config))
+    watch_config = load_watch_config(
+        Path(args.config), require_cookies_file=not args.import_cookies
+    )
+    if args.import_cookies:
+        return import_watch_cookies(watch_config, args)
+
     STATE_PATH = Path(watch_config["state_file"])
 
     if args.dry_run:
@@ -787,10 +980,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_record and finish_if_complete(config, state):
         return 0
 
-    body, problem = fetch_page(
-        str(config["page_url"]),
-        render_javascript=bool(config["render_javascript"]),
-    )
+    body, problem = fetch_configured_page(config, save_cookies=True)
     if body is None:
         if args.no_record:
             return 0

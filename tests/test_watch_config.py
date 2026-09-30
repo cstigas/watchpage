@@ -55,6 +55,8 @@ class WatchConfigTest(unittest.TestCase):
         self.assertEqual(config["must_contain"], "")
         self.assertEqual(config["page_url"], "https://example.com/product")
         self.assertFalse(config["render_javascript"])
+        self.assertIsNone(config["cookies_file"])
+        self.assertIsNone(config["user_agent"])
 
     def test_render_javascript_is_optional(self):
         path = write_config(self.tmp, self.base(render_javascript=True))
@@ -156,6 +158,45 @@ class WatchConfigTest(unittest.TestCase):
             self.base(watch={"kind": "text", "value": "  ", "alert_when": "present"}),
         )
         self.assert_parse_error(path, "Parsing error on watch.json: value is empty")
+
+    def test_relative_cookies_file_is_under_the_project(self):
+        destination = watchpage.ROOT / "cookies" / "unit-test-cookies.txt"
+        destination.parent.mkdir(exist_ok=True)
+        destination.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+        try:
+            path = write_config(self.tmp, self.base(cookies_file="cookies/unit-test-cookies.txt"))
+            config = watchpage.load_watch_config(path)
+            self.assertEqual(config["cookies_file"], destination)
+        finally:
+            destination.unlink(missing_ok=True)
+            try:
+                destination.parent.rmdir()
+            except OSError:
+                pass
+
+    def test_missing_cookies_file(self):
+        path = write_config(self.tmp, self.base(cookies_file="cookies/missing.txt"))
+        self.assert_parse_error(
+            path,
+            "Parsing error on watch.json: cookies file not found: "
+            + str(watchpage.ROOT / "cookies" / "missing.txt"),
+        )
+
+    def test_import_allows_a_missing_cookies_file(self):
+        destination = self.tmp / "jar.txt"
+        path = write_config(self.tmp, self.base(cookies_file=str(destination)))
+        config = watchpage.load_watch_config(path, require_cookies_file=False)
+        self.assertEqual(config["cookies_file"], destination)
+        self.assertFalse(destination.exists())
+
+    def test_user_agent(self):
+        path = write_config(self.tmp, self.base(user_agent="TicketsBrowser/9"))
+        config = watchpage.load_watch_config(path)
+        self.assertEqual(config["user_agent"], "TicketsBrowser/9")
+
+    def test_empty_user_agent(self):
+        path = write_config(self.tmp, self.base(user_agent="  "))
+        self.assert_parse_error(path, "Parsing error on watch.json: user_agent is empty")
 
     def test_invalid_css_selector(self):
         path = write_config(

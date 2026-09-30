@@ -28,7 +28,7 @@ When a watch is triggered, or when a page has failed 10 checks in a row, watchpa
 
 ## Dependencies
 
-watchpage needs Python 3.10 or newer. It runs on macOS and Linux. Text watches use the Python standard library. A CSS watch needs BeautifulSoup. A watch that must run the page's JavaScript needs a headless browser, installed separately because that check is the exception.
+watchpage needs Python 3.10 or newer. It runs on macOS and Linux. Text watches use the Python standard library. A CSS watch needs BeautifulSoup. Importing cookies from Chrome, Chromium, Brave, or Edge needs the cryptography package, which `./setup.sh` installs. Firefox import uses the standard library. A watch that must run the page's JavaScript needs a headless browser, installed separately because that check is the exception.
 
 `./setup.sh` creates a `.venv` in this directory and installs whatever is missing from `requirements.txt`. It does not need root. If `python3 -m venv` is missing, install the venv module for your Python. On Debian and Ubuntu that package is `python3-venv`.
 
@@ -93,6 +93,8 @@ python3 watchpage.py --config config.json
 - `cron_marker` is the comment watchpage looks for when it disables the job after the alert. The default is `watchpage:<name>`.
 - `state_file` stores who has been texted and the failure count. The default is `state/<name>.json`, relative to this directory.
 - `render_javascript` is optional and defaults to `false`. `true` renders the page in a headless browser before the check. Leave it off unless the text you care about is missing from the first HTML response. A rendered check is slower, uses much more memory, and is no longer a simple download.
+- `cookies_file` is optional. It is a Netscape cookie file sent on each fetch. A relative path is under this directory. Leave it out and the fetch sends no cookies.
+- `user_agent` is optional. When omitted, the request uses `watchpage/1.0`. Set it to the browser's User-Agent when a clearance cookie only works with that agent.
 
 ### Text, alert when the phrase is gone
 
@@ -188,6 +190,40 @@ The four watches above download the HTML and stop there. Playwright is not impor
 }
 ```
 
+## Import cookies from a browser
+
+Use this when you are already logged in, or you have already passed a captcha, and the watch should see that same page. The import reads one browser profile and one domain. It does not scan every browser, and it does not take a parent domain or any other subdomain. Cron does not talk to the browser. It sends the cookie file written here.
+
+On a terminal, the command asks which browser, which profile when there are several, and which domain. The suggested domain is the host from `url`. A cookie set on a parent domain, such as `example.com` for a page on `www.example.com`, is included only if you enter that parent domain.
+
+```bash
+.venv/bin/python watchpage.py --config config.json --import-cookies
+.venv/bin/python watchpage.py --config config.json --import-cookies --browser chrome --domain www.example.com
+```
+
+`--browser` is `chrome`, `chromium`, `brave`, `edge`, `firefox`, or `safari`. Safari is macOS only. From cron, or any run without a terminal, pass both `--browser` and `--domain`. If that browser has more than one profile, pass `--profile` as well.
+
+The command writes `cookies/<name>.txt` when the config has no `cookies_file`, and prints the line to add. When `cookies_file` is already set, it rewrites that file. The file mode is `0600`. The output shows the browser, the domain, the count, and the path. It does not show cookie names or values.
+
+Chrome, Chromium, Brave, and Edge keep cookie values encrypted. On macOS, Keychain may prompt once for the Safe Storage password. On Linux, install `secretstorage` if the key is in the keyring (`.venv/bin/python -m pip install secretstorage`). The import decrypts only the rows for the domain you named. If the cookies are not Chrome's v10 format, export a Netscape `cookies.txt` yourself and set `cookies_file` to that path. Reading Safari's cookie file can require Full Disk Access for the terminal.
+
+A later check sends those cookies and, when the page comes back in full, saves `Set-Cookie` back into the file so a session can refresh. `--dry-run` sends the cookies and does not write the file. A clearance cookie usually works only from this machine, with the same User-Agent, until it expires. This does not solve captchas.
+
+```json
+{
+  "name": "summer-tickets",
+  "url": "https://www.example.com/tickets",
+  "to_numbers": ["+14165550101"],
+  "cookies_file": "cookies/summer-tickets.txt",
+  "user_agent": "Mozilla/5.0",
+  "watch": {
+    "kind": "text",
+    "value": "will be available",
+    "alert_when": "absent"
+  }
+}
+```
+
 ## Schedule a check
 
 
@@ -209,7 +245,7 @@ Another watch uses its own lock, log, config, and marker. With the default marke
 
 ## See whether the watch is triggered
 
-This fetches the page and prints one line. It sends no text, writes no state, and does not edit crontab. It fetches even when a normal run would exit because every number was already texted.
+This fetches the page and prints one line. It sends no text, writes no state, does not update the cookie file, and does not edit crontab. It fetches even when a normal run would exit because every number was already texted.
 
 ```bash
 python3 watchpage.py --config config.json --dry-run
