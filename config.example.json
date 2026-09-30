@@ -1,0 +1,13 @@
+{
+  "name": "christmas-town",
+  "url": "https://www.conservationhalton.ca/christmas-town/",
+  "message": "Christmas Town tickets may be on sale: {url}",
+  "must_contain": "christmas town",
+  "cron_marker": "christmas-town-watch",
+  "state_file": "state.json",
+  "watch": {
+    "kind": "text",
+    "value": "will be available",
+    "alertwhen": "absent"
+  }
+}

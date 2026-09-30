@@ -1,0 +1,10 @@
+.env
+config.json
+state.json
+state.json.tmp
+state/
+watch.log
+watch.lock
+.venv/
+__pycache__/
+*.pyc
