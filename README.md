@@ -190,6 +190,7 @@ The four watches above download the HTML and stop there. Playwright is not impor
 
 ## Schedule a check
 
+
 Run `crontab -e` and add one line per config. The five fields at the start of the line are the schedule. `* * * * *` runs every minute; change them to whatever interval you want. The comment at the end must match that config's `cron_marker`. After every number has received the alert, watchpage finds the line by that comment and comments it out, which is what stops the repeat texts. The marker is read only from the comment, so a directory path that contains the same words does not disable a different watch.
 
 For the tickets example, the marker is `watchpage:summer-tickets`. Use the directory where you installed watchpage in place of `/path/to/watchpage`:
