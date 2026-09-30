@@ -28,7 +28,7 @@ When a watch is triggered, or when a page has failed 10 checks in a row, watchpa
 
 ## Dependencies
 
-watchpage needs Python 3.10 or newer. It runs on macOS and Linux. Text watches use the Python standard library. A CSS watch needs BeautifulSoup.
+watchpage needs Python 3.10 or newer. It runs on macOS and Linux. Text watches use the Python standard library. A CSS watch needs BeautifulSoup. A watch that must run the page's JavaScript needs a headless browser, installed separately because that check is the exception.
 
 `./setup.sh` creates a `.venv` in this directory and installs whatever is missing from `requirements.txt`. It does not need root. If `python3 -m venv` is missing, install the venv module for your Python. On Debian and Ubuntu that package is `python3-venv`.
 
@@ -36,7 +36,11 @@ watchpage needs Python 3.10 or newer. It runs on macOS and Linux. Text watches u
 ./setup.sh
 ```
 
+After the small install, the script asks whether to install headless Chromium. The default answer is no. Answer yes only for a watch that sets `render_javascript` to `true`. That check is slower, uses much more memory, and is no longer a simple download. Pressing Enter skips it.
+
 Run the watcher with `.venv/bin/python` after that, including from cron, so a CSS watch can import BeautifulSoup.
+
+On a console-only Ubuntu server the browser does not need X Windows. Chromium still needs its system libraries. If it fails to start, install those once with `sudo .venv/bin/python -m playwright install-deps chromium`, then run `./setup.sh` again and answer yes. `./test.sh` runs every test in `tests/`, including a check that headless Chromium can start and read text added by JavaScript.
 
 ## Configure Twilio
 
@@ -88,6 +92,7 @@ python3 watchpage.py --config config.json
 - `name` is a short id. It sets the default cron comment, `watchpage:<name>`, and the default state file, `state/<name>.json`.
 - `cron_marker` is the comment watchpage looks for when it disables the job after the alert. The default is `watchpage:<name>`.
 - `state_file` stores who has been texted and the failure count. The default is `state/<name>.json`, relative to this directory.
+- `render_javascript` is optional and defaults to `false`. `true` renders the page in a headless browser before the check. Leave it off unless the text you care about is missing from the first HTML response. A rendered check is slower, uses much more memory, and is no longer a simple download.
 
 ### Text, alert when the phrase is gone
 
@@ -164,7 +169,27 @@ Texts when `.sold-out` no longer matches.
 }
 ```
 
+### Page built by JavaScript
+
+The four watches above download the HTML and stop there. Playwright is not imported. Set `render_javascript` to `true` when a script adds the text after the page loads. Run `./setup.sh` and answer yes when it asks about headless Chromium. This check is slower, uses much more memory, and is no longer a simple download.
+
+```json
+{
+  "name": "js-sold-out",
+  "url": "https://example.com/tickets",
+  "to_numbers": ["+14165550101"],
+  "message": "The sold-out notice is gone: {url}",
+  "render_javascript": true,
+  "watch": {
+    "kind": "css",
+    "value": ".sold-out",
+    "alert_when": "absent"
+  }
+}
+```
+
 ## Schedule a check
+
 
 Run `crontab -e` and add one line per config. The five fields at the start of the line are the schedule. `* * * * *` runs every minute; change them to whatever interval you want. The comment at the end must match that config's `cron_marker`. After every number has received the alert, watchpage finds the line by that comment and comments it out, which is what stops the repeat texts. The marker is read only from the comment, so a directory path that contains the same words does not disable a different watch.
 
@@ -216,7 +241,7 @@ A page that does not meet the condition logs `still waiting`. A failed fetch is 
 
 ## What has to be true before the text goes out
 
-- The request returns HTTP 200 and a body of at least 500 characters
+- The check returns HTTP 200 and a body of at least 500 characters. With `render_javascript` that body is the page after scripts run
 - If `must_contain` is set, that text is in the body
 - The watch condition is met
 

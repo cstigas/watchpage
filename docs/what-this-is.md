@@ -15,6 +15,8 @@ The watch lives in a JSON file passed as `--config`. Twilio credentials stay in 
 
 `must_contain` is optional. A page that lacks that text is skipped, so a wrong page does not count as the phrase being gone.
 
+`render_javascript` defaults to false. A plain watch downloads the HTML and does not load a browser. Set it to true only when the phrase or element appears after scripts run. That path uses headless Chromium, so the check is slower, uses much more memory, and is no longer a simple download. Run `./setup.sh` and answer yes when it asks about headless Chromium.
+
 `--dry-run` fetches the page and prints `watch triggered`, `watch not triggered`, or `watch not checked`. It does not send a text or change state.
 
 Each successful send is stored in the state file named by the config. A retry texts only numbers that have not been recorded. Once every number has been sent the alert, the script comments out the crontab line whose comment matches `cron_marker`. If it is ever started again, it exits before fetching the site.

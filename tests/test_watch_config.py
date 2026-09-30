@@ -54,6 +54,18 @@ class WatchConfigTest(unittest.TestCase):
         self.assertEqual(config["state_file"], watchpage.ROOT / "state" / "shop-cart.json")
         self.assertEqual(config["must_contain"], "")
         self.assertEqual(config["page_url"], "https://example.com/product")
+        self.assertFalse(config["render_javascript"])
+
+    def test_render_javascript_is_optional(self):
+        path = write_config(self.tmp, self.base(render_javascript=True))
+        config = watchpage.load_watch_config(path)
+        self.assertTrue(config["render_javascript"])
+
+    def test_render_javascript_must_be_a_boolean(self):
+        path = write_config(self.tmp, self.base(render_javascript="yes"))
+        self.assert_parse_error(
+            path, "Parsing error on watch.json: render_javascript must be true or false"
+        )
 
     def test_relative_state_file_is_under_the_project(self):
         path = write_config(self.tmp, self.base(state_file="state.json"))
