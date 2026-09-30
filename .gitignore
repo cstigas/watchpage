@@ -3,6 +3,7 @@ config.json
 state.json
 state.json.tmp
 state/
+cookies/
 watch.log
 watch.lock
 .venv/
