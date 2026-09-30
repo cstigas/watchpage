@@ -438,7 +438,7 @@ def import_playwright():
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
         raise SystemExit(
-            "JavaScript rendering needs Playwright. Install it with: ./setup.sh --browser"
+            "JavaScript rendering needs Playwright. Run ./setup.sh and answer yes when asked about headless Chromium."
         ) from exc
     return sync_playwright, PlaywrightTimeout
 
@@ -476,7 +476,7 @@ def render_page(url: str) -> tuple[str | None, str | None]:
         message = str(exc)
         if "Executable doesn't exist" in message or "playwright install" in message:
             raise SystemExit(
-                "Headless Chromium is not installed. Install it with: ./setup.sh --browser"
+                "Headless Chromium is not installed. Run ./setup.sh and answer yes when asked about headless Chromium."
             ) from exc
         log(f"fetch failed: {message}")
         return None, "fetch failed"

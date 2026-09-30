@@ -1,5 +1,6 @@
 """Headless Chromium is used only when a watch asks for JavaScript rendering."""
 
+import os
 import subprocess
 import sys
 import threading
@@ -21,6 +22,41 @@ document.getElementById("status").textContent = parts.join(" ") + " {PAD}";
 </script>
 </body></html>
 """
+
+
+def process_tree_rss_kb(root_pid: int) -> int:
+    """Resident memory, in KB, of a process and every process it started."""
+    listing = subprocess.run(
+        ["ps", "-ax", "-o", "pid=", "-o", "ppid=", "-o", "rss="],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if listing.returncode != 0:
+        return 0
+    children: dict[int, list[int]] = {}
+    rss: dict[int, int] = {}
+    for line in listing.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        try:
+            pid, ppid, size = int(parts[0]), int(parts[1]), int(parts[2])
+        except ValueError:
+            continue
+        rss[pid] = size
+        children.setdefault(ppid, []).append(pid)
+    total = 0
+    stack = [root_pid]
+    seen: set[int] = set()
+    while stack:
+        pid = stack.pop()
+        if pid in seen:
+            continue
+        seen.add(pid)
+        total += rss.get(pid, 0)
+        stack.extend(children.get(pid, []))
+    return total
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -60,6 +96,17 @@ class HeadlessBrowserTest(unittest.TestCase):
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         url = f"http://127.0.0.1:{server.server_address[1]}/"
+        peak_kb = 0
+        stop = threading.Event()
+
+        def sample_memory() -> None:
+            nonlocal peak_kb
+            while not stop.is_set():
+                peak_kb = max(peak_kb, process_tree_rss_kb(os.getpid()))
+                stop.wait(0.05)
+
+        sampler = threading.Thread(target=sample_memory, daemon=True)
+        sampler.start()
         try:
             plain, plain_problem = watchpage.fetch_page(url, render_javascript=False)
             self.assertIsNone(plain_problem)
@@ -70,5 +117,9 @@ class HeadlessBrowserTest(unittest.TestCase):
             self.assertIsNone(problem, rendered)
             self.assertIn("rendered by javascript", rendered)
         finally:
+            stop.set()
+            sampler.join()
+            peak_kb = max(peak_kb, process_tree_rss_kb(os.getpid()))
+            print(f"peak resident memory: {peak_kb / 1024:.0f} MB", flush=True)
             server.shutdown()
             server.server_close()

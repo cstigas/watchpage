@@ -36,15 +36,11 @@ watchpage needs Python 3.10 or newer. It runs on macOS and Linux. Text watches u
 ./setup.sh
 ```
 
+After the small install, the script asks whether to install headless Chromium. The default answer is no. Answer yes only for a watch that sets `render_javascript` to `true`. That check is slower, uses much more memory, and is no longer a simple download. Pressing Enter skips it.
+
 Run the watcher with `.venv/bin/python` after that, including from cron, so a CSS watch can import BeautifulSoup.
 
-Most pages can be checked with that download. Set `render_javascript` to `true` only when the phrase or element appears after scripts run. That check launches headless Chromium, so it is slower, uses much more memory, and is no longer a simple download. Install it once with:
-
-```bash
-./setup.sh --browser
-```
-
-On a console-only Ubuntu server this does not need X Windows. Chromium still needs its system libraries. If the browser fails to start, install those once with `sudo .venv/bin/python -m playwright install-deps chromium`, then run `./setup.sh --browser` again. `./test.sh` runs every test in `tests/`, including a check that headless Chromium can start and read text added by JavaScript.
+On a console-only Ubuntu server the browser does not need X Windows. Chromium still needs its system libraries. If it fails to start, install those once with `sudo .venv/bin/python -m playwright install-deps chromium`, then run `./setup.sh` again and answer yes. `./test.sh` runs every test in `tests/`, including a check that headless Chromium can start and read text added by JavaScript.
 
 ## Configure Twilio
 
@@ -175,7 +171,7 @@ Texts when `.sold-out` no longer matches.
 
 ### Page built by JavaScript
 
-The four watches above download the HTML and stop there. Playwright is not imported. Set `render_javascript` to `true` when a script adds the text after the page loads. Install the browser first with `./setup.sh --browser`. This check is slower, uses much more memory, and is no longer a simple download.
+The four watches above download the HTML and stop there. Playwright is not imported. Set `render_javascript` to `true` when a script adds the text after the page loads. Run `./setup.sh` and answer yes when it asks about headless Chromium. This check is slower, uses much more memory, and is no longer a simple download.
 
 ```json
 {

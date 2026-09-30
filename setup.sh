@@ -1,22 +1,14 @@
 #!/usr/bin/env bash
 # Create a local virtualenv and install anything missing from requirements.txt.
-# ./setup.sh --browser also installs Playwright and headless Chromium.
+# Then ask whether to install Playwright and headless Chromium.
 # Uses .venv in this directory, so it does not need root.
 # Exits 1 when Python is missing or too old, or when the venv module is missing.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-install_browser=0
-if [[ $# -gt 1 ]]; then
-  echo "usage: ./setup.sh [--browser]" >&2
+if [[ $# -ne 0 ]]; then
+  echo "usage: ./setup.sh" >&2
   exit 1
-fi
-if [[ $# -eq 1 ]]; then
-  if [[ "$1" != "--browser" ]]; then
-    echo "usage: ./setup.sh [--browser]" >&2
-    exit 1
-  fi
-  install_browser=1
 fi
 
 if ! command -v python3 >/dev/null 2>&1; then
@@ -77,6 +69,23 @@ PY
 }
 
 install_requirements requirements.txt
+
+install_browser=0
+if ( : <>/dev/tty ) 2>/dev/null; then
+  exec 3<>/dev/tty
+  echo "A headless browser renders pages whose text appears only after JavaScript runs." >&3
+  echo "That check is slower, uses much more memory, and is no longer a simple download." >&3
+  echo "Skip this unless a watch sets render_javascript to true." >&3
+  printf "Install headless Chromium? [y/N] " >&3
+  read -r answer <&3
+  exec 3<&-
+  case "${answer}" in
+    [yY]|[yY][eE][sS]) install_browser=1 ;;
+    *) echo "Skipping headless Chromium." ;;
+  esac
+else
+  echo "No terminal attached, so headless Chromium was not installed."
+fi
 
 if [[ "${install_browser}" -eq 1 ]]; then
   install_requirements requirements-browser.txt
