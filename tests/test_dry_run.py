@@ -46,7 +46,7 @@ class DryRunTest(unittest.TestCase):
         self.page = None
         self.problem = "fetch failed"
 
-        def fake_fetch(_url):
+        def fake_fetch(_url, **_kwargs):
             if self.page is None:
                 return None, self.problem
             return self.page, None

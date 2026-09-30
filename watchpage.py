@@ -245,6 +245,13 @@ def load_watch_config(path: Path) -> dict[str, object]:
     else:
         state_file = ROOT / "state" / f"{name}.json"
 
+    render_javascript = False
+    if "render_javascript" in data:
+        raw_render = data["render_javascript"]
+        if not isinstance(raw_render, bool):
+            config_error(path, "render_javascript must be true or false")
+        render_javascript = raw_render
+
     return {
         "name": name,
         "recipients": recipients,
@@ -254,6 +261,7 @@ def load_watch_config(path: Path) -> dict[str, object]:
         "must_contain": must_contain,
         "cron_marker": cron_marker,
         "state_file": state_file,
+        "render_javascript": render_javascript,
         "watch": {"kind": kind, "value": value, "alert_when": alert_when},
     }
 
@@ -423,8 +431,68 @@ def pending_recipients(recipients: list[str], state: dict[str, object]) -> list[
     return [number for number in recipients if number not in sent]
 
 
-def fetch_page(url: str) -> tuple[str | None, str | None]:
+def import_playwright():
+    """Import Playwright only for a watch that renders JavaScript."""
+    try:
+        from playwright.sync_api import TimeoutError as PlaywrightTimeout
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise SystemExit(
+            "JavaScript rendering needs Playwright. Install it with: ./setup.sh --browser"
+        ) from exc
+    return sync_playwright, PlaywrightTimeout
+
+
+def render_page(url: str) -> tuple[str | None, str | None]:
+    """Return the HTML after scripts run, using a headless browser."""
+    sync_playwright, playwright_timeout = import_playwright()
+    log("rendering page in a headless browser")
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page(user_agent=USER_AGENT)
+                response = page.goto(
+                    url,
+                    wait_until="load",
+                    timeout=FETCH_TIMEOUT_SECONDS * 1000,
+                )
+                if response is None:
+                    log("fetch failed: no response")
+                    return None, "fetch failed"
+                if response.status != 200:
+                    log(f"fetch failed: HTTP {response.status}")
+                    return None, "fetch failed"
+                try:
+                    page.wait_for_load_state("networkidle", timeout=5000)
+                except playwright_timeout:
+                    pass
+                body = page.content()
+            finally:
+                browser.close()
+    except SystemExit:
+        raise
+    except Exception as exc:
+        message = str(exc)
+        if "Executable doesn't exist" in message or "playwright install" in message:
+            raise SystemExit(
+                "Headless Chromium is not installed. Install it with: ./setup.sh --browser"
+            ) from exc
+        log(f"fetch failed: {message}")
+        return None, "fetch failed"
+
+    if len(body) < MIN_BODY_LENGTH:
+        log(f"page too short ({len(body)} bytes); skipping")
+        return None, "page too short"
+    return body, None
+
+
+def fetch_page(
+    url: str, *, render_javascript: bool = False
+) -> tuple[str | None, str | None]:
     """Return (body, None) or (None, reason)."""
+    if render_javascript:
+        return render_page(url)
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(request, timeout=FETCH_TIMEOUT_SECONDS) as response:
@@ -644,7 +712,10 @@ def send_pending(
 
 
 def run_dry(config: dict[str, object]) -> int:
-    body, problem = fetch_page(str(config["page_url"]))
+    body, problem = fetch_page(
+        str(config["page_url"]),
+        render_javascript=bool(config["render_javascript"]),
+    )
     outcome, detail = assess(body, problem, config)
     if outcome == "not_checked":
         log(f"watch not checked: {detail}")
@@ -716,7 +787,10 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_record and finish_if_complete(config, state):
         return 0
 
-    body, problem = fetch_page(str(config["page_url"]))
+    body, problem = fetch_page(
+        str(config["page_url"]),
+        render_javascript=bool(config["render_javascript"]),
+    )
     if body is None:
         if args.no_record:
             return 0

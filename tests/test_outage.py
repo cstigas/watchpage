@@ -51,7 +51,7 @@ class OutageAlertTest(unittest.TestCase):
         self.sent = []
         self.page = None
 
-        def fake_fetch(_url):
+        def fake_fetch(_url, **_kwargs):
             if self.page is None:
                 return None, "fetch failed"
             return self.page, None
