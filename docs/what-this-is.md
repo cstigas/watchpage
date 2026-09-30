@@ -8,7 +8,7 @@ The watch lives in a JSON file passed as `--config`. Twilio credentials stay in 
 
 `watch.kind` is `text` or `css`. `watch.alert_when` is `present` or `absent`.
 
-- Text, absent: text when a phrase is gone. The Christmas Town config waits while the page says `will be available`, then texts `Christmas Town tickets may be on sale: {url}`.
+- Text, absent: text when a phrase is gone. A tickets page can wait while it says `will be available`, then text `Tickets may be on sale: {url}`.
 - Text, present: text when a phrase shows up, such as `add to cart`.
 - CSS, present: text when a selector such as `a.buy-button` matches.
 - CSS, absent: text when a selector such as `.sold-out` no longer matches.

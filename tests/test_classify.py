@@ -14,13 +14,13 @@ def watch_config(kind, value, alert_when, must_contain=""):
 
 class ClassifyPageTest(unittest.TestCase):
     def test_text_absent_waits_while_phrase_remains(self):
-        body = "Christmas Town tickets will be available late September."
-        config = watch_config("text", "will be available", "absent", "christmas town")
+        body = "Summer concert tickets will be available late September."
+        config = watch_config("text", "will be available", "absent", "summer concert")
         self.assertEqual(watchpage.classify_page(body, config), "waiting")
 
     def test_text_absent_triggers_when_phrase_is_gone(self):
-        body = "Christmas Town tickets are on sale now."
-        config = watch_config("text", "will be available", "absent", "christmas town")
+        body = "Summer concert tickets are on sale now."
+        config = watch_config("text", "will be available", "absent", "summer concert")
         self.assertEqual(watchpage.classify_page(body, config), "triggered")
 
     def test_text_present_triggers_when_phrase_shows_up(self):
@@ -55,5 +55,5 @@ class ClassifyPageTest(unittest.TestCase):
 
     def test_must_contain_skips_a_page_that_lacks_the_expected_text(self):
         body = "This parking page does not mention the event, and will be available is gone."
-        config = watch_config("text", "will be available", "absent", "christmas town")
+        config = watch_config("text", "will be available", "absent", "summer concert")
         self.assertEqual(watchpage.classify_page(body, config), "unexpected")

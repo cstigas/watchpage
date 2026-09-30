@@ -19,11 +19,11 @@ class DryRunTest(unittest.TestCase):
         self.config_path.write_text(
             json.dumps(
                 {
-                    "name": "christmas-town",
-                    "url": "https://www.conservationhalton.ca/christmas-town/",
-                    "message": "Christmas Town tickets may be on sale: {url}",
+                    "name": "summer-tickets",
+                    "url": "https://example.com/tickets",
+                    "message": "Tickets may be on sale: {url}",
                     "to_numbers": ["+14165550101"],
-                    "must_contain": "christmas town",
+                    "must_contain": "summer concert",
                     "state_file": str(self.state_path),
                     "watch": {
                         "kind": "text",
@@ -81,14 +81,14 @@ class DryRunTest(unittest.TestCase):
         return code, stdout.getvalue()
 
     def test_triggered(self):
-        self.page = "Christmas Town tickets are on sale now. " * 20
+        self.page = "Summer concert tickets are on sale now. " * 20
         code, output = self.run_dry()
         self.assertEqual(code, 0)
         self.assertIn("watch triggered", output)
         self.assertNotIn("watch not triggered", output)
 
     def test_not_triggered(self):
-        self.page = "Christmas Town tickets will be available. " * 20
+        self.page = "Summer concert tickets will be available. " * 20
         code, output = self.run_dry()
         self.assertEqual(code, 0)
         self.assertIn("watch not triggered", output)
