@@ -4,5 +4,5 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 export DONT_UPDATE_STATE=1
-python3 -c 'import watch; watch.warn_config()'
+python3 -c 'import watchpage; watchpage.warn_config()'
 PYTHONPATH=. python3 -m unittest tests/test_sms_send.py -v

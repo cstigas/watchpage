@@ -7,7 +7,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 
-import watch
+import watchpage
 
 
 def write_config(directory: Path, data: dict) -> Path:
@@ -21,7 +21,7 @@ class WatchConfigTest(unittest.TestCase):
         stderr = StringIO()
         with redirect_stderr(stderr):
             with self.assertRaises(SystemExit) as caught:
-                watch.load_watch_config(path)
+                watchpage.load_watch_config(path)
         self.assertEqual(caught.exception.code, 1)
         text = stderr.getvalue()
         if prefix:
@@ -36,6 +36,7 @@ class WatchConfigTest(unittest.TestCase):
         data = {
             "name": "shop-cart",
             "url": "https://example.com/product",
+            "to_numbers": ["+14165550101", "+14165550102"],
             "watch": {
                 "kind": "text",
                 "value": "add to cart",
@@ -47,17 +48,17 @@ class WatchConfigTest(unittest.TestCase):
 
     def test_defaults_message_marker_and_state_file(self):
         path = write_config(self.tmp, self.base())
-        config = watch.load_watch_config(path)
+        config = watchpage.load_watch_config(path)
         self.assertEqual(config["message"], "Change detected: {url}")
         self.assertEqual(config["cron_marker"], "watchpage:shop-cart")
-        self.assertEqual(config["state_file"], watch.ROOT / "state" / "shop-cart.json")
+        self.assertEqual(config["state_file"], watchpage.ROOT / "state" / "shop-cart.json")
         self.assertEqual(config["must_contain"], "")
         self.assertEqual(config["page_url"], "https://example.com/product")
 
     def test_relative_state_file_is_under_the_project(self):
         path = write_config(self.tmp, self.base(state_file="state.json"))
-        config = watch.load_watch_config(path)
-        self.assertEqual(config["state_file"], watch.ROOT / "state.json")
+        config = watchpage.load_watch_config(path)
+        self.assertEqual(config["state_file"], watchpage.ROOT / "state.json")
 
     def test_missing_file(self):
         self.assert_parse_error(
@@ -69,6 +70,14 @@ class WatchConfigTest(unittest.TestCase):
         path.write_text("{", encoding="utf-8")
         self.assert_parse_error(
             path, "Parsing error on watch.json: invalid JSON", prefix=True
+        )
+
+    def test_missing_to_numbers(self):
+        data = self.base()
+        del data["to_numbers"]
+        self.assert_parse_error(
+            write_config(self.tmp, data),
+            "Parsing error on watch.json: Missing to_numbers key",
         )
 
     def test_missing_url(self):
@@ -121,7 +130,7 @@ class WatchConfigTest(unittest.TestCase):
         stderr = StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
             with self.assertRaises(SystemExit) as caught:
-                watch.main(["--config", str(path), "--dry-run"])
+                watchpage.main(["--config", str(path), "--dry-run"])
         self.assertEqual(caught.exception.code, 1)
         self.assertEqual(stdout.getvalue(), "")
         self.assertEqual(

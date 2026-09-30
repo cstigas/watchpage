@@ -1,22 +1,23 @@
-"""Send a real test text to each number in .env."""
+"""Send a real test text to each number in config.json."""
 
 import unittest
 
-import watch
+import watchpage
 
 TEST_MESSAGE = "testing sms send functionality"
 
 
 class SendSmsTest(unittest.TestCase):
     def setUp(self):
-        watch.warn_config()
+        watchpage.warn_config()
 
     def test_sends_to_each_configured_number(self):
-        config = watch.load_config()
+        config = watchpage.load_config()
+        config.update(watchpage.load_watch_config(watchpage.ROOT / "config.json"))
         recipients = config["recipients"]
-        self.assertTrue(recipients, "TO_NUMBERS is empty")
+        self.assertTrue(recipients, "to_numbers is empty")
         for number in recipients:
-            sent = watch.send_sms(config, number, TEST_MESSAGE)
+            sent = watchpage.send_sms(config, number, TEST_MESSAGE)
             self.assertTrue(sent, f"Twilio did not accept the message to {number}")
 
 

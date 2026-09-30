@@ -61,7 +61,6 @@ REQUIRED_SETTINGS = (
     "TWILIO_ACCOUNT_SID",
     "TWILIO_AUTH_TOKEN",
     "TWILIO_FROM_NUMBER",
-    "TO_NUMBERS",
     "OUTAGE_TO_NUMBER",
 )
 
@@ -98,14 +97,7 @@ def config_warnings(env_path: Path | None = None) -> list[str]:
         if not raw:
             warnings.append(f"{key} is not set")
             continue
-        if key == "TO_NUMBERS":
-            numbers = [part.strip() for part in raw.split(",") if part.strip()]
-            if not numbers:
-                warnings.append("TO_NUMBERS is not set")
-            for number in numbers:
-                if not valid_e164(number):
-                    warnings.append(f"TO_NUMBERS entry {number} is not an E.164 number")
-        elif key in ("TWILIO_FROM_NUMBER", "OUTAGE_TO_NUMBER") and not valid_e164(raw):
+        if key in ("TWILIO_FROM_NUMBER", "OUTAGE_TO_NUMBER") and not valid_e164(raw):
             warnings.append(f"{key} is not an E.164 number")
     return warnings
 
@@ -124,7 +116,6 @@ def load_config() -> dict[str, object]:
         "TWILIO_ACCOUNT_SID",
         "TWILIO_AUTH_TOKEN",
         "TWILIO_FROM_NUMBER",
-        "TO_NUMBERS",
         "OUTAGE_TO_NUMBER",
     ):
         if os.environ.get(key):
@@ -136,7 +127,6 @@ def load_config() -> dict[str, object]:
             "TWILIO_ACCOUNT_SID",
             "TWILIO_AUTH_TOKEN",
             "TWILIO_FROM_NUMBER",
-            "TO_NUMBERS",
         )
         if not str(merged.get(key, "")).strip()
     ]
@@ -147,18 +137,6 @@ def load_config() -> dict[str, object]:
             + f". Copy {ENV_PATH.name} from config.example.env and fill it in."
         )
 
-    recipients = []
-    seen: set[str] = set()
-    for raw in str(merged["TO_NUMBERS"]).split(","):
-        if not raw.strip():
-            continue
-        number = require_e164("TO_NUMBERS entry", raw)
-        if number not in seen:
-            seen.add(number)
-            recipients.append(number)
-    if not recipients:
-        raise SystemExit("TO_NUMBERS is empty.")
-
     outage_raw = str(merged.get("OUTAGE_TO_NUMBER") or "").strip()
     outage_number = require_e164("OUTAGE_TO_NUMBER", outage_raw) if outage_raw else ""
 
@@ -168,7 +146,6 @@ def load_config() -> dict[str, object]:
         "from_number": require_e164(
             "TWILIO_FROM_NUMBER", str(merged["TWILIO_FROM_NUMBER"])
         ),
-        "recipients": recipients,
         "outage_number": outage_number,
     }
 
@@ -187,6 +164,24 @@ def require_text_key(path: Path, obj: dict, key: str) -> str:
     return value.strip()
 
 
+def parse_to_numbers(path: Path, data: dict) -> list[str]:
+    if "to_numbers" not in data:
+        config_error(path, "Missing to_numbers key")
+    raw = data["to_numbers"]
+    if not isinstance(raw, list) or not raw:
+        config_error(path, "to_numbers must be a non-empty list of phone numbers")
+    recipients: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, str) or not valid_e164(item):
+            config_error(path, f"to_numbers entry {item!r} is not an E.164 number")
+        number = "".join(item.split())
+        if number not in seen:
+            seen.add(number)
+            recipients.append(number)
+    return recipients
+
+
 def load_watch_config(path: Path) -> dict[str, object]:
     """Load the page URL and watch condition from a JSON file."""
     if not path.is_file():
@@ -198,6 +193,7 @@ def load_watch_config(path: Path) -> dict[str, object]:
     if not isinstance(data, dict):
         config_error(path, "file is not a JSON object")
 
+    recipients = parse_to_numbers(path, data)
     name = require_text_key(path, data, "name")
     if not NAME_RE.fullmatch(name):
         config_error(
@@ -251,6 +247,7 @@ def load_watch_config(path: Path) -> dict[str, object]:
 
     return {
         "name": name,
+        "recipients": recipients,
         "url": url,
         "page_url": url,
         "message": message,

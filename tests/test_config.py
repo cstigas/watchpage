@@ -5,14 +5,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import watch
+import watchpage
 
 
 class ConfigWarningTest(unittest.TestCase):
     def setUp(self):
-        watch.warn_config()
-        self.saved = {key: os.environ.get(key) for key in watch.REQUIRED_SETTINGS}
-        for key in watch.REQUIRED_SETTINGS:
+        watchpage.warn_config()
+        self.saved = {key: os.environ.get(key) for key in watchpage.REQUIRED_SETTINGS}
+        for key in watchpage.REQUIRED_SETTINGS:
             os.environ.pop(key, None)
         self.tmp = Path(tempfile.mkdtemp())
 
@@ -31,7 +31,6 @@ class ConfigWarningTest(unittest.TestCase):
                     "TWILIO_ACCOUNT_SID=ACtest",
                     "TWILIO_AUTH_TOKEN=secret",
                     "TWILIO_FROM_NUMBER=+14165550100",
-                    "TO_NUMBERS=+14165550101,+14165550102",
                     f"OUTAGE_TO_NUMBER={outage}",
                 ]
             )
@@ -42,8 +41,8 @@ class ConfigWarningTest(unittest.TestCase):
 
     def test_complete_config_has_no_warnings(self):
         path = self.write_env("+14165550199")
-        self.assertEqual(watch.config_warnings(path), [])
+        self.assertEqual(watchpage.config_warnings(path), [])
 
     def test_blank_outage_number_warns(self):
         path = self.write_env("")
-        self.assertIn("OUTAGE_TO_NUMBER is not set", watch.config_warnings(path))
+        self.assertIn("OUTAGE_TO_NUMBER is not set", watchpage.config_warnings(path))

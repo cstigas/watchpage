@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 export DONT_UPDATE_STATE=1
-python3 -c 'import watch; watch.warn_config()'
+python3 -c 'import watchpage; watchpage.warn_config()'
 
 tmp=$(mktemp)
 python3 - "$tmp" <<'PY'
@@ -22,5 +22,5 @@ echo "Looking for text that is not on the page: this phrase is not on the page"
 echo "The watch is text/absent, so this run sends the alert."
 echo "This test does not write state and does not edit crontab."
 
-python3 watch.py --config "$tmp" --no-record
+python3 watchpage.py --config "$tmp" --no-record
 rm -f "$tmp"

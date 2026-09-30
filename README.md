@@ -31,11 +31,10 @@ Edit `.env`:
 TWILIO_ACCOUNT_SID=ACxxxxxxxx
 TWILIO_AUTH_TOKEN=your_auth_token
 TWILIO_FROM_NUMBER=+1XXXXXXXXXX
-TO_NUMBERS=+1XXXXXXXXXX,+1YYYYYYYYYY
 OUTAGE_TO_NUMBER=+1XXXXXXXXXX
 ```
 
-Numbers are E.164 (`+` and country code). Separate extra recipients with commas. `OUTAGE_TO_NUMBER` receives one text when the page fails 10 checks in a row. The watch alerts still go to `TO_NUMBERS`.
+Numbers are E.164 (`+` and country code). `OUTAGE_TO_NUMBER` receives one text when the page fails 10 checks in a row. The numbers that receive the watch alert belong to each config file, in `to_numbers`.
 
 Check that every required setting is filled in:
 
@@ -43,7 +42,7 @@ Check that every required setting is filled in:
 ./check_config.sh
 ```
 
-The watcher, `./check_config.sh`, and the test scripts warn when any of these are missing or not a valid phone number: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, `TO_NUMBERS`, `OUTAGE_TO_NUMBER`. The watcher keeps running and writes that warning to the log. `--dry-run` does not need Twilio settings.
+The watcher, `./check_config.sh`, and the test scripts warn when any of these are missing or not a valid phone number: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, `OUTAGE_TO_NUMBER`. The watcher keeps running and writes that warning to the log. `--dry-run` does not need Twilio settings.
 
 ## Configure the watch
 
@@ -56,10 +55,10 @@ cp config.example.json config.json
 Run it with:
 
 ```bash
-python3 watch.py --config config.json
+python3 watchpage.py --config config.json
 ```
 
-`name` is used in the default cron comment (`watchpage:<name>`) and the default state file (`state/<name>.json`). `message` may include `{url}` and `{name}`. It defaults to `Change detected: {url}`. `must_contain` is optional. When set, a page that lacks that text is skipped and does not alert. `cron_marker` defaults to `watchpage:<name>`. `state_file` defaults to `state/<name>.json`, relative to this directory.
+`to_numbers` is the list of E.164 numbers that receive the text for this watch. `name` is used in the default cron comment (`watchpage:<name>`) and the default state file (`state/<name>.json`). `message` may include `{url}` and `{name}`. It defaults to `Change detected: {url}`. `must_contain` is optional. When set, a page that lacks that text is skipped and does not alert. `cron_marker` defaults to `watchpage:<name>`. `state_file` defaults to `state/<name>.json`, relative to this directory.
 
 `watch.kind` is `text` or `css`. `watch.alert_when` is `present` or `absent`. Text matching ignores case.
 
@@ -71,6 +70,7 @@ This is [config.example.json](config.example.json). It texts when a normal Chris
 {
   "name": "christmas-town",
   "url": "https://www.conservationhalton.ca/christmas-town/",
+  "to_numbers": ["+14165550101", "+14165550102"],
   "message": "Christmas Town tickets may be on sale: {url}",
   "must_contain": "christmas town",
   "cron_marker": "christmas-town-watch",
@@ -91,6 +91,7 @@ Texts when the page contains `add to cart`.
 {
   "name": "shop-cart",
   "url": "https://example.com/product",
+  "to_numbers": ["+14165550101"],
   "message": "Add to cart is on the page: {url}",
   "watch": {
     "kind": "text",
@@ -108,6 +109,7 @@ Texts when `a.buy-button` matches. Install BeautifulSoup first.
 {
   "name": "buy-button",
   "url": "https://example.com/tickets",
+  "to_numbers": ["+14165550101"],
   "message": "The buy button is on the page: {url}",
   "watch": {
     "kind": "css",
@@ -125,6 +127,7 @@ Texts when `.sold-out` no longer matches.
 {
   "name": "sold-out",
   "url": "https://example.com/tickets",
+  "to_numbers": ["+14165550101"],
   "message": "The sold-out notice is gone: {url}",
   "watch": {
     "kind": "css",
@@ -141,13 +144,13 @@ On the server, run `crontab -e` and add a line for each config. The comment at t
 For the Christmas Town example, the marker is `christmas-town-watch`:
 
 ```cron
-* * * * * flock -n /home/cstigas/christmas-town-watch/watch.lock /home/cstigas/christmas-town-watch/.venv/bin/python /home/cstigas/christmas-town-watch/watch.py --config /home/cstigas/christmas-town-watch/config.json >> /home/cstigas/christmas-town-watch/watch.log 2>&1 # christmas-town-watch
+* * * * * flock -n /home/cstigas/christmas-town-watch/watch.lock /home/cstigas/christmas-town-watch/.venv/bin/python /home/cstigas/christmas-town-watch/watchpage.py --config /home/cstigas/christmas-town-watch/config.json >> /home/cstigas/christmas-town-watch/watch.log 2>&1 # christmas-town-watch
 ```
 
 Another watch uses its own lock, log, config, and marker. With the default marker for `name` `shop-cart`:
 
 ```cron
-* * * * * flock -n /home/cstigas/christmas-town-watch/shop-cart.lock /home/cstigas/christmas-town-watch/.venv/bin/python /home/cstigas/christmas-town-watch/watch.py --config /home/cstigas/christmas-town-watch/shop-cart.json >> /home/cstigas/christmas-town-watch/shop-cart.log 2>&1 # watchpage:shop-cart
+* * * * * flock -n /home/cstigas/christmas-town-watch/shop-cart.lock /home/cstigas/christmas-town-watch/.venv/bin/python /home/cstigas/christmas-town-watch/watchpage.py --config /home/cstigas/christmas-town-watch/shop-cart.json >> /home/cstigas/christmas-town-watch/shop-cart.log 2>&1 # watchpage:shop-cart
 ```
 
 `flock` skips a run if the previous one is still going. Confirm the job with `crontab -l`.
@@ -157,7 +160,7 @@ Another watch uses its own lock, log, config, and marker. With the default marke
 This fetches the page and prints one line. It does not send a text, write state, or edit crontab. It still checks the page after every recipient has already been notified.
 
 ```bash
-python3 watch.py --config config.json --dry-run
+python3 watchpage.py --config config.json --dry-run
 ```
 
 - `watch triggered` means the condition is met
@@ -171,7 +174,7 @@ Exit 0 for triggered and not triggered. Exit 1 for not checked.
 This sends the real message and leaves the watcher running. It does not write state and does not remove cron.
 
 ```bash
-python3 watch.py --config config.json --test-sms
+python3 watchpage.py --config config.json --test-sms
 ```
 
 `./test_outage.sh` times out 10 times against a local server that accepts the connection and never answers, then sends one outage text to `OUTAGE_TO_NUMBER`. It does not read a watch config, write state, or edit crontab.
