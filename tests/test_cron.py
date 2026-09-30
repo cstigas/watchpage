@@ -19,8 +19,8 @@ class CommentOutCronTest(unittest.TestCase):
         self.original_run = watchpage.subprocess.run
         self.listing = (
             "0 0 * * * other-job\n"
-            "* * * * * python3 /home/cstigas/christmas-town-watch/watchpage.py "
-            "# christmas-town-watch\n"
+            "* * * * * python3 /path/to/watchpage/watchpage.py "
+            "# summer-tickets\n"
         )
 
         def fake_run(args, input=None, capture_output=None, text=None, check=None):
@@ -39,31 +39,31 @@ class CommentOutCronTest(unittest.TestCase):
         watchpage.subprocess.run = self.original_run
 
     def test_comments_out_the_watcher_and_keeps_other_jobs(self):
-        watchpage.comment_out_cron("christmas-town-watch")
+        watchpage.comment_out_cron("summer-tickets")
         written = self.calls[1]
         self.assertEqual(written[0], ["crontab", "-"])
         self.assertEqual(
             written[1],
             "0 0 * * * other-job\n"
-            "# * * * * * python3 /home/cstigas/christmas-town-watch/watchpage.py "
-            "# christmas-town-watch\n",
+            "# * * * * * python3 /path/to/watchpage/watchpage.py "
+            "# summer-tickets\n",
         )
         self.assertNotIn((["crontab", "-r"], None), self.calls)
 
     def test_ignores_the_marker_when_it_is_only_in_the_path(self):
         self.listing = (
-            "* * * * * python3 /home/cstigas/christmas-town-watch/watchpage.py "
+            "* * * * * python3 /path/to/summer-tickets/watchpage.py "
             "--config other.json # watchpage:other\n"
         )
-        watchpage.comment_out_cron("christmas-town-watch")
+        watchpage.comment_out_cron("summer-tickets")
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(self.calls[0][0], ["crontab", "-l"])
 
     def test_leaves_an_already_commented_line_unchanged(self):
         self.listing = (
-            "# * * * * * python3 /home/cstigas/christmas-town-watch/watchpage.py "
-            "# christmas-town-watch\n"
+            "# * * * * * python3 /path/to/watchpage/watchpage.py "
+            "# summer-tickets\n"
         )
-        watchpage.comment_out_cron("christmas-town-watch")
+        watchpage.comment_out_cron("summer-tickets")
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(self.calls[0][0], ["crontab", "-l"])

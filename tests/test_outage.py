@@ -69,12 +69,12 @@ class OutageAlertTest(unittest.TestCase):
         self.config_path.write_text(
             json.dumps(
                 {
-                    "name": "christmas-town",
-                    "url": "https://www.conservationhalton.ca/christmas-town/",
-                    "message": "Christmas Town tickets may be on sale: {url}",
+                    "name": "summer-tickets",
+                    "url": "https://example.com/tickets",
+                    "message": "Tickets may be on sale: {url}",
                     "to_numbers": ["+14165550101", "+14165550102"],
-                    "must_contain": "christmas town",
-                    "cron_marker": "christmas-town-watch",
+                    "must_contain": "summer concert",
+                    "cron_marker": "watchpage:summer-tickets",
                     "state_file": str(self.tmp / "state.json"),
                     "watch": {
                         "kind": "text",
@@ -138,8 +138,8 @@ class OutageAlertTest(unittest.TestCase):
         self.assertEqual(number, "+14165550199")
         self.assertEqual(
             body,
-            "christmas-town page unreachable for 10 checks: "
-            "https://www.conservationhalton.ca/christmas-town/",
+            "summer-tickets page unreachable for 10 checks: "
+            "https://example.com/tickets",
         )
         self.assertEqual(self.stored["sent_to"], [])
         self.assertTrue(self.stored["outage_alerted"])
@@ -147,7 +147,7 @@ class OutageAlertTest(unittest.TestCase):
         self.assertEqual(self.run_watch(), 0)
         self.assertEqual(len(self.sent), 1)
 
-        self.page = "Christmas Town tickets will be available. " * 20
+        self.page = "Summer concert tickets will be available. " * 20
         self.assertEqual(self.run_watch(), 0)
         self.assertEqual(len(self.sent), 1)
         self.assertEqual(self.stored["consecutive_failures"], 0)
@@ -182,7 +182,7 @@ class OutageAlertTest(unittest.TestCase):
         self.assertEqual(len(self.sent), 2)
         self.assertTrue(self.stored["outage_alerted"])
         self.assertTrue(
-            self.sent[1][1].startswith("christmas-town page unreachable for 11 checks:")
+            self.sent[1][1].startswith("summer-tickets page unreachable for 11 checks:")
         )
 
     def test_no_record_does_not_write_state_or_edit_cron(self):
@@ -190,7 +190,7 @@ class OutageAlertTest(unittest.TestCase):
             raise AssertionError("crontab must not be edited")
 
         watchpage.subprocess.run = reject_cron
-        self.page = "Christmas Town tickets are on sale now. " * 20
+        self.page = "Summer concert tickets are on sale now. " * 20
         self.assertEqual(self.run_watch(["--no-record"]), 0)
         self.assertIsNone(self.stored)
         self.assertEqual([number for number, _body in self.sent], ["+14165550101", "+14165550102"])

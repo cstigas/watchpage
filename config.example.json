@@ -1,10 +1,10 @@
 {
-  "name": "christmas-town",
-  "url": "https://www.conservationhalton.ca/christmas-town/",
+  "name": "summer-tickets",
+  "url": "https://example.com/tickets",
   "to_numbers": ["+14165550101", "+14165550102"],
-  "message": "Christmas Town tickets may be on sale: {url}",
-  "must_contain": "christmas town",
-  "cron_marker": "christmas-town-watch",
+  "message": "Tickets may be on sale: {url}",
+  "must_contain": "summer concert",
+  "cron_marker": "watchpage:summer-tickets",
   "state_file": "state.json",
   "watch": {
     "kind": "text",
