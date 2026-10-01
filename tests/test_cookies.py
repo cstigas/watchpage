@@ -9,7 +9,7 @@ import tempfile
 import threading
 import time
 import unittest
-from contextlib import contextmanager, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import StringIO
 from pathlib import Path
@@ -105,9 +105,10 @@ def safari_record(domain: str, name: str, value: str, expires_unix: int | None) 
     struct.pack_into(
         "<I", header, 28, strings_at + len(domain_b) + len(name_b) + len(path_b)
     )
-    body = domain_b + name_b + path_b + value_b
     mac_expiry = 0.0 if expires_unix is None else float(expires_unix - 978307200)
-    record = header + body + struct.pack("<dd", 0.0, mac_expiry)
+    struct.pack_into("<d", header, 40, mac_expiry)
+    body = domain_b + name_b + path_b + value_b
+    record = header + body
     struct.pack_into("<I", record, 0, len(record))
     return bytes(record)
 
@@ -331,6 +332,7 @@ class CookieImportTest(unittest.TestCase):
                 safari_record("example.com", "kept", KEPT, future),
                 safari_record(".example.com", "dot", DOT, future),
                 safari_record("www.example.com", "www", WWW, future),
+                safari_record("example.com", "old", EXPIRED, 1),
             ]
         )
         path = self.tmp / "Cookies.binarycookies"
@@ -600,6 +602,41 @@ class CookieCommandTest(unittest.TestCase):
         self.assertNotIn(KEPT, text)
         self.assertNotIn("Add this to the watch config", text)
 
+    def test_import_without_config_writes_domain_cookie(self):
+        saved_root = watchpage.ROOT
+        watchpage.ROOT = self.tmp
+        try:
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                code = watchpage.main(
+                    [
+                        "--import-cookies",
+                        "--browser",
+                        "firefox",
+                        "--domain",
+                        "www.costco.ca",
+                        "--profile",
+                        "default",
+                    ]
+                )
+        finally:
+            watchpage.ROOT = saved_root
+        self.assertEqual(code, 0)
+        path = self.tmp / "cookies" / "www.costco.ca.cookie"
+        self.assertTrue(path.is_file())
+        text = stdout.getvalue()
+        self.assertIn('"cookies_file": "cookies/www.costco.ca.cookie"', text)
+        self.assertNotIn(KEPT, text)
+        self.assertIn("www.costco.ca", text)
+
+    def test_config_is_required_for_a_watch(self):
+        stderr = StringIO()
+        with redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as caught:
+                watchpage.main([])
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("--config", stderr.getvalue())
+
     def test_hint_when_the_config_has_no_cookies_file(self):
         saved_root = watchpage.ROOT
         watchpage.ROOT = self.tmp
@@ -622,9 +659,9 @@ class CookieCommandTest(unittest.TestCase):
             watchpage.ROOT = saved_root
         self.assertEqual(code, 0)
         text = stdout.getvalue()
-        self.assertIn('"cookies_file": "cookies/shop-cart.txt"', text)
+        self.assertIn('"cookies_file": "cookies/example.com.cookie"', text)
         self.assertNotIn(KEPT, text)
-        self.assertTrue((self.tmp / "cookies" / "shop-cart.txt").is_file())
+        self.assertTrue((self.tmp / "cookies" / "example.com.cookie").is_file())
 
 
 if __name__ == "__main__":

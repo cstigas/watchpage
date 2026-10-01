@@ -197,13 +197,13 @@ Use this when you are already logged in, or you have already passed a captcha, a
 On a terminal, the command asks which browser, which profile when there are several, and which domain. The suggested domain is the host from `url`. A cookie set on a parent domain, such as `example.com` for a page on `www.example.com`, is included only if you enter that parent domain.
 
 ```bash
+.venv/bin/python watchpage.py --import-cookies --browser safari --domain www.example.com
 .venv/bin/python watchpage.py --config config.json --import-cookies
-.venv/bin/python watchpage.py --config config.json --import-cookies --browser chrome --domain www.example.com
 ```
 
-`--browser` is `chrome`, `chromium`, `brave`, `edge`, `firefox`, or `safari`. Safari is macOS only. From cron, or any run without a terminal, pass both `--browser` and `--domain`. If that browser has more than one profile, pass `--profile` as well.
+`--browser` is `chrome`, `chromium`, `brave`, `edge`, `firefox`, or `safari`. Safari is macOS only. `--config` is optional. Without it, pass `--browser` and `--domain`. On a terminal, `--config` can suggest the domain from `url` and ask for anything you leave out. From cron, or any run without a terminal, pass both `--browser` and `--domain`. If that browser has more than one profile, pass `--profile` as well.
 
-The command writes `cookies/<name>.txt` when the config has no `cookies_file`, and prints the line to add. When `cookies_file` is already set, it rewrites that file. The file mode is `0600`. The output shows the browser, the domain, the count, and the path. It does not show cookie names or values.
+The command writes `cookies/{domain}.cookie`, such as `cookies/www.example.com.cookie`, and prints the line to add to a watch config. When the config already sets `cookies_file`, it rewrites that file instead. The file mode is `0600`. The output shows the browser, the domain, the count, and the path. It does not show cookie names or values.
 
 Chrome, Chromium, Brave, and Edge keep cookie values encrypted. On macOS, Keychain may prompt once for the Safe Storage password. On Linux, install `secretstorage` if the key is in the keyring (`.venv/bin/python -m pip install secretstorage`). The import decrypts only the rows for the domain you named. If the cookies are not Chrome's v10 format, export a Netscape `cookies.txt` yourself and set `cookies_file` to that path. Reading Safari's cookie file can require Full Disk Access for the terminal.
 
@@ -214,7 +214,7 @@ A later check sends those cookies and, when the page comes back in full, saves `
   "name": "summer-tickets",
   "url": "https://www.example.com/tickets",
   "to_numbers": ["+14165550101"],
-  "cookies_file": "cookies/summer-tickets.txt",
+  "cookies_file": "cookies/www.example.com.cookie",
   "user_agent": "Mozilla/5.0",
   "watch": {
     "kind": "text",

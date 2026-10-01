@@ -464,8 +464,9 @@ def _parse_safari_cookie(record: bytes, domain: str) -> dict[str, object] | None
     host = _c_string(record, domain_at)
     if host is None or not host_matches(host, domain):
         return None
-    # Dates sit in the last 16 bytes: creation, then expiry.
-    raw_expiry = struct.unpack_from("<d", record, len(record) - 8)[0]
+    # Expiration is a Mac absolute time at offset 40, before the strings.
+    # The tail of the record is the cookie value.
+    raw_expiry = struct.unpack_from("<d", record, 40)[0]
     if raw_expiry == 0:
         expires: int | None = None
     else:
@@ -676,13 +677,15 @@ def _choose_profile(browser: str, requested: str | None, interactive: bool) -> P
 
 def import_site_cookies(
     *,
-    destination: Path,
+    destination: Path | None,
     suggest_domain: str,
     config_hint: str | None,
     browser: str | None,
     domain: str | None,
     profile: str | None,
     interactive: bool | None = None,
+    destination_dir: Path | None = None,
+    hint_root: Path | None = None,
 ) -> int:
     """Write one domain from one browser profile to destination. Returns 0."""
     if interactive is None:
@@ -706,6 +709,13 @@ def import_site_cookies(
         domain = _prompt_domain(suggest_domain)
     else:
         domain = normalize_domain(domain)
+
+    if destination is None:
+        if destination_dir is None:
+            raise SystemExit("No destination for the cookie file.")
+        destination = destination_dir / f"{domain}.cookie"
+        if config_hint is None and hint_root is not None:
+            config_hint = destination.relative_to(hint_root).as_posix()
 
     chosen = _choose_profile(browser, profile.strip() if profile else None, interactive)
     cookies = read_domain_cookies(browser, chosen, domain)

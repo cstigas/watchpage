@@ -1071,15 +1071,33 @@ def run_dry(config: dict[str, object]) -> int:
 
 def import_watch_cookies(config: dict[str, object], args: argparse.Namespace) -> int:
     destination = config.get("cookies_file")
-    hint = None
+    destination_dir = None
+    hint_root = None
     if not isinstance(destination, Path):
-        destination = ROOT / "cookies" / f"{config['name']}.txt"
-        hint = destination.relative_to(ROOT).as_posix()
+        destination = None
+        destination_dir = ROOT / "cookies"
+        hint_root = ROOT
     host = urllib.parse.urlparse(str(config["page_url"])).hostname or ""
     return cookie_import.import_site_cookies(
-        destination=destination,
+        destination=destination if isinstance(destination, Path) else None,
+        destination_dir=destination_dir,
+        hint_root=hint_root,
         suggest_domain=host,
-        config_hint=hint,
+        config_hint=None,
+        browser=args.browser,
+        domain=args.domain,
+        profile=args.profile,
+    )
+
+
+def import_cookies(args: argparse.Namespace) -> int:
+    """Import one domain without a watch config."""
+    return cookie_import.import_site_cookies(
+        destination=None,
+        destination_dir=ROOT / "cookies",
+        hint_root=ROOT,
+        suggest_domain="",
+        config_hint=None,
         browser=args.browser,
         domain=args.domain,
         profile=args.profile,
@@ -1093,7 +1111,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--config",
-        help="JSON file with the page URL and what to watch.",
+        help="JSON file with the page URL and what to watch. Optional with --import-cookies.",
     )
     parser.add_argument(
         "--dry-run",
@@ -1103,7 +1121,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--import-cookies",
         action="store_true",
-        help="Copy cookies for one domain from one local browser into the watch cookie file. Does not fetch the page.",
+        help="Copy cookies for one domain from one local browser into cookies/{domain}.cookie. Does not fetch the page. --config is optional.",
     )
     parser.add_argument(
         "--browser",
@@ -1135,6 +1153,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.dry_run and (args.test_sms or args.no_record):
         raise SystemExit("--dry-run cannot be combined with other test flags")
+    if args.import_cookies and not args.config:
+        return import_cookies(args)
     if not args.config:
         parser.error("the following arguments are required: --config")
 
