@@ -40,7 +40,7 @@ After the small install, the script asks whether to install headless Chromium. T
 
 Run the watcher with `.venv/bin/python` after that, including from cron, so a CSS watch can import BeautifulSoup.
 
-On a console-only Ubuntu server the browser does not need X Windows. Chromium still needs its system libraries. If it fails to start, install those once with `sudo .venv/bin/python -m playwright install-deps chromium`, then run `./setup.sh` again and answer yes. `./test.sh` runs every test in `tests/`, including a check that headless Chromium can start and read text added by JavaScript.
+On a console-only Ubuntu server the browser does not need X Windows. Chromium still needs its system libraries. If it fails to start, install those once with `sudo .venv/bin/python -m playwright install-deps chromium`, then run `./setup.sh` again and answer yes. `./run_tests.sh` runs every test in `tests/`, including a check that headless Chromium can start and read text added by JavaScript. It does not send SMS. `./run_tests.sh --list` prints the test names. Pass `-t` or `--test` with a name, such as `./run_tests.sh --test test_browser`, to run one test.
 
 ## Configure Twilio
 
@@ -70,7 +70,7 @@ Check that the required settings are filled in:
 ./check_config.sh
 ```
 
-The watcher, `./check_config.sh`, and the test scripts warn when any of these are missing or not a valid phone number: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, `OUTAGE_TO_NUMBER`. The watcher keeps running and writes that warning to the log. `--dry-run` does not need Twilio settings.
+The watcher, `./check_config.sh`, and `./run_tests.sh` warn when any of these are missing or not a valid phone number: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, `OUTAGE_TO_NUMBER`. The watcher keeps running and writes that warning to the log. `--dry-run` does not need Twilio settings.
 
 ## Configure the watch
 
@@ -265,7 +265,7 @@ This sends the real message. It does not record the send and does not comment ou
 python3 watchpage.py --config config.json --test-sms
 ```
 
-`./test_outage.sh` opens a local server that accepts the connection and sends nothing back. The watcher times out against it 10 times, then sends one outage text to `OUTAGE_TO_NUMBER`. It does not read a watch config, write state, or edit crontab.
+`./run_tests.sh --test test_outage` runs the outage checks in `tests/` and does not send a text. `./run_tests.sh --test test_outage_with_send` opens a local server that accepts the connection and sends nothing back. The watcher times out against it 10 times, then sends one outage text to `OUTAGE_TO_NUMBER`. It does not read a watch config, write state, or edit crontab. `./run_tests.sh --test test_sms_send` sends one test text to each number in the watch config. Neither send runs unless you name it.
 
 ## Watch the log
 

@@ -933,23 +933,13 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="If the watch is triggered, send the alert without saving state or commenting out cron.",
     )
-    parser.add_argument(
-        "--test-outage",
-        action="store_true",
-        help="Time out against a local hung server and send one outage text without saving state.",
-    )
     args = parser.parse_args(argv)
-    if args.import_cookies and (
-        args.dry_run or args.test_sms or args.no_record or args.test_outage
-    ):
+    if args.import_cookies and (args.dry_run or args.test_sms or args.no_record):
         raise SystemExit(
-            "--import-cookies cannot be combined with --dry-run, --test-sms, --no-record, or --test-outage"
+            "--import-cookies cannot be combined with --dry-run, --test-sms, or --no-record"
         )
-    if args.dry_run and (args.test_sms or args.no_record or args.test_outage):
+    if args.dry_run and (args.test_sms or args.no_record):
         raise SystemExit("--dry-run cannot be combined with other test flags")
-    if args.test_outage:
-        warn_config()
-        return run_outage_test(load_config())
     if not args.config:
         parser.error("the following arguments are required: --config")
 
@@ -969,9 +959,6 @@ def main(argv: list[str] | None = None) -> int:
     config.update(watch_config)
     state = load_state()
     recipients = list(config["recipients"])
-
-    if args.test_outage:
-        return run_outage_test(config)
 
     if args.test_sms:
         log("sending test SMS")

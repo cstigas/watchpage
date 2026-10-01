@@ -1,5 +1,9 @@
-"""Send a real test text to each number in config.json."""
+"""Send a real test text to each number in config.json.
 
+The full suite skips this. ./run_tests.sh --test test_sms_send opts in.
+"""
+
+import os
 import unittest
 
 import watchpage
@@ -7,6 +11,10 @@ import watchpage
 TEST_MESSAGE = "testing sms send functionality"
 
 
+@unittest.skipUnless(
+    os.environ.get("SEND_TEST_SMS") == "1",
+    "sends a real SMS; run ./run_tests.sh --test test_sms_send",
+)
 class SendSmsTest(unittest.TestCase):
     def setUp(self):
         watchpage.warn_config()
