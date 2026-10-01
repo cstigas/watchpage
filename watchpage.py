@@ -37,6 +37,21 @@ OUTAGE_FAILURE_THRESHOLD = 10
 USER_AGENT = "watchpage/1.0"
 DEFAULT_MESSAGE = "Change detected: {url}"
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+RENDER_WAIT_SECONDS = 20
+# Headless Chromium on a server: no GPU, and /dev/shm is often tiny.
+CHROMIUM_ARGS = ["--disable-dev-shm-usage", "--disable-gpu"]
+# Returns the page HTML once it shows the watched text or selector (and
+# must_contain), or, with nothing to watch for, once the HTML is parsed.
+READ_PAGE_JS = """({needle, selector, must}) => {
+  const root = document.documentElement;
+  if (!root) return false;
+  const html = root.outerHTML;
+  if (!needle && !selector) return document.readyState === 'loading' ? false : html;
+  const lower = html.toLowerCase();
+  if (must && !lower.includes(must)) return false;
+  if (needle) return lower.includes(needle) ? html : false;
+  try { return document.querySelector(selector) ? html : false; } catch (e) { return false; }
+}"""
 
 
 def log(message: str) -> None:
@@ -210,21 +225,44 @@ def load_watch_config(
     if not url.startswith(("http://", "https://")):
         config_error(path, "url must start with http:// or https://")
 
+    fetch_url = url
+    if "check_url" in data:
+        fetch_url = require_text_key(path, data, "check_url")
+        if not fetch_url.startswith(("http://", "https://")):
+            config_error(path, "check_url must start with http:// or https://")
+
+    headers: dict[str, str] = {}
+    if "headers" in data:
+        raw_headers = data["headers"]
+        if not isinstance(raw_headers, dict) or not all(
+            isinstance(key, str) and isinstance(item, str)
+            for key, item in raw_headers.items()
+        ):
+            config_error(path, "headers must be an object of text values")
+        headers = dict(raw_headers)
+
     if "watch" not in data:
         config_error(path, "Missing watch key")
     watch = data["watch"]
     if not isinstance(watch, dict):
         config_error(path, "watch must be an object")
     kind = require_text_key(path, watch, "kind")
-    if kind not in ("text", "css"):
-        config_error(path, 'kind must be "text" or "css"')
+    if kind not in ("text", "css", "json"):
+        config_error(path, 'kind must be "text", "css", or "json"')
     alert_when = require_text_key(path, watch, "alert_when")
     if alert_when not in ("present", "absent"):
         config_error(path, 'alert_when must be "present" or "absent"')
     value = require_text_key(path, watch, "value")
-    if kind == "css":
+    parsed_watch = {"kind": kind, "value": value, "alert_when": alert_when}
+    selectors = [value] if kind == "css" else []
+    if kind == "json":
+        parsed_watch["path"] = require_text_key(path, watch, "path")
+        if "script" in watch:
+            parsed_watch["script"] = require_text_key(path, watch, "script")
+            selectors.append(parsed_watch["script"])
+    for selector in selectors:
         try:
-            validate_css(value)
+            validate_css(selector)
         except SystemExit as exc:
             detail = exc.code if isinstance(exc.code, str) else "invalid CSS selector"
             config_error(path, detail)
@@ -276,6 +314,8 @@ def load_watch_config(
         "recipients": recipients,
         "url": url,
         "page_url": url,
+        "fetch_url": fetch_url,
+        "headers": headers,
         "message": message,
         "must_contain": must_contain,
         "cron_marker": cron_marker,
@@ -283,7 +323,7 @@ def load_watch_config(
         "cookies_file": cookies_file,
         "user_agent": user_agent,
         "render_javascript": render_javascript,
-        "watch": {"kind": kind, "value": value, "alert_when": alert_when},
+        "watch": parsed_watch,
     }
 
 
@@ -487,6 +527,8 @@ def playwright_cookie_payload(
 ) -> list[dict[str, object]]:
     request = urllib.request.Request(url)
     policy = jar._policy
+    # CookieJar sets this before return_ok. Expiry checks read it.
+    policy._now = int(datetime.now(timezone.utc).timestamp())
     payload: list[dict[str, object]] = []
     for cookie in jar:
         if not policy.return_ok(cookie, request):
@@ -566,12 +608,30 @@ def render_page(
     user_agent: str | None = None,
     jar: http.cookiejar.MozillaCookieJar | None = None,
     save_cookies: bool = False,
+    watch: dict[str, str] | None = None,
+    must_contain: str = "",
+    headers: dict[str, str] | None = None,
 ) -> tuple[str | None, str | None]:
-    """Return the HTML after scripts run, using a headless browser."""
+    """Return the HTML after scripts run, using a headless browser.
+
+    Load events are not a usable signal: trackers and long-lived requests can
+    hold them back forever. The page is read as soon as it shows the watched
+    text or selector, or after RENDER_WAIT_SECONDS if it never does. Without a
+    watch, it is read once the HTML has been parsed.
+    """
     sync_playwright, playwright_timeout = import_playwright()
     agent = user_agent or USER_AGENT
     log("rendering page in a headless browser")
     stage = "start"
+    started = datetime.now().timestamp()
+    probe = {"needle": "", "selector": "", "must": must_contain.lower()}
+    if watch:
+        if watch["kind"] == "text":
+            probe["needle"] = watch["value"].lower()
+        elif watch["kind"] == "css":
+            probe["selector"] = watch["value"]
+        elif watch.get("script"):
+            probe["selector"] = watch["script"]
     # #region agent log
     _agent_debug(
         "A",
@@ -580,92 +640,91 @@ def render_page(
         {
             "has_cookies": jar is not None,
             "cookie_count": len(list(jar)) if jar is not None else 0,
-            "user_agent_set": bool(user_agent),
+            "watch_kind": watch["kind"] if watch else None,
         },
     )
     # #endregion
     try:
         with sync_playwright() as playwright:
             stage = "launch"
-            browser = playwright.chromium.launch(headless=True)
-            # #region agent log
-            _agent_debug(
-                "A",
-                "watchpage.py:render_page",
-                "browser launched",
-                {"browser_type": type(browser).__name__},
-            )
-            # #endregion
+            browser = playwright.chromium.launch(headless=True, args=CHROMIUM_ARGS)
             failure = None
             try:
-                context = None
-                if jar is None:
-                    stage = "new_page"
-                    page = browser.new_page(user_agent=agent)
-                else:
-                    stage = "new_context"
-                    context = browser.new_context(user_agent=agent)
+                stage = "new_context"
+                context = browser.new_context(
+                    user_agent=agent, extra_http_headers=headers or {}
+                )
+                if jar is not None:
                     payload = playwright_cookie_payload(jar, url)
-                    # #region agent log
-                    _agent_debug(
-                        "C",
-                        "watchpage.py:render_page",
-                        "cookie payload ready",
-                        {
-                            "payload_count": len(payload),
-                            "missing_domain": sum(
-                                1 for item in payload if not item.get("domain")
-                            ),
-                            "expired": sum(
-                                1
-                                for item in payload
-                                if isinstance(item.get("expires"), int)
-                                and item["expires"] < int(datetime.now().timestamp())
-                            ),
-                        },
-                    )
-                    # #endregion
                     if payload:
                         stage = "add_cookies"
-                        try:
-                            context.add_cookies(payload)
-                        except Exception as cookie_exc:
-                            # #region agent log
-                            _agent_debug(
-                                "C",
-                                "watchpage.py:render_page",
-                                "add_cookies failed",
-                                {
-                                    "type": type(cookie_exc).__name__,
-                                    "error": str(cookie_exc)[:500],
-                                },
-                            )
-                            # #endregion
-                            log("fetch failed: could not apply cookies")
-                            return None, "fetch failed"
-                    stage = "new_page"
-                    page = context.new_page()
+                        context.add_cookies(payload)
+                stage = "new_page"
+                page = context.new_page()
+
+                # Scripts on the page may send the tab elsewhere, for example to
+                # a sign-in page. Once the requested page has arrived, the tab
+                # stays on it. "aborted" cancels the navigation without
+                # replacing the page with an error page.
+                stay: dict[str, object] = {"path": None, "blocked": [], "documents": []}
+
+                def note_document(response) -> None:
+                    request = response.request
+                    if not request.is_navigation_request() or request.frame != page.main_frame:
+                        return
+                    path = urllib.parse.urlparse(response.url).path
+                    # #region agent log
+                    if len(stay["documents"]) < 8:
+                        stay["documents"].append({"status": response.status, "path": path[:120]})
+                    # #endregion
+                    if stay["path"] is None and not 300 <= response.status < 400:
+                        stay["path"] = path
+
+                # #region agent log
+                _marks: dict[str, int] = {}
+                _routes = {"count": 0, "max_gap_ms": 0, "last": 0.0}
+
+                def _mark(name: str) -> None:
+                    _marks[name] = int((datetime.now().timestamp() - started) * 1000)
+                # #endregion
+
+                def stay_on_page(route) -> None:
+                    # #region agent log
+                    _now = datetime.now().timestamp()
+                    if _routes["last"]:
+                        _routes["max_gap_ms"] = max(
+                            _routes["max_gap_ms"], int((_now - _routes["last"]) * 1000)
+                        )
+                    _routes["last"] = _now
+                    _routes["count"] += 1
+                    # #endregion
+                    request = route.request
+                    if (
+                        stay["path"] is not None
+                        and request.is_navigation_request()
+                        and request.frame == page.main_frame
+                        and urllib.parse.urlparse(request.url).path != stay["path"]
+                    ):
+                        # #region agent log
+                        if len(stay["blocked"]) < 8:
+                            stay["blocked"].append(urllib.parse.urlparse(request.url).path[:120])
+                        # #endregion
+                        route.abort("aborted")
+                        return
+                    route.fallback()
+
+                page.on("response", note_document)
+                page.route("**/*", stay_on_page)
+
                 stage = "goto"
                 # #region agent log
-                _agent_debug(
-                    "B",
-                    "watchpage.py:render_page",
-                    "before goto",
-                    {"stage": stage},
-                )
+                _mark("page_ready")
                 # #endregion
                 response = page.goto(
-                    url,
-                    wait_until="load",
-                    timeout=FETCH_TIMEOUT_SECONDS * 1000,
+                    url, wait_until="commit", timeout=FETCH_TIMEOUT_SECONDS * 1000
                 )
                 # #region agent log
-                _agent_debug(
-                    "B",
-                    "watchpage.py:render_page",
-                    "after goto",
-                    {"status": None if response is None else response.status},
-                )
+                _mark("committed")
                 # #endregion
                 if response is None:
                     log("fetch failed: no response")
@@ -673,19 +732,69 @@ def render_page(
                 if response.status != 200:
                     log(f"fetch failed: HTTP {response.status}")
                     return None, "fetch failed"
+
+                def read_html(wanted: dict[str, str], seconds: float) -> str | None:
+                    handle = page.wait_for_function(
+                        READ_PAGE_JS, arg=wanted, timeout=seconds * 1000, polling=250
+                    )
+                    try:
+                        value = handle.json_value()
+                    finally:
+                        handle.dispose()
+                    return value if isinstance(value, str) else None
+
+                stage = "render"
+                found = True
                 try:
-                    stage = "networkidle"
-                    page.wait_for_load_state("networkidle", timeout=5000)
+                    body = read_html(probe, RENDER_WAIT_SECONDS)
                 except playwright_timeout:
-                    pass
-                stage = "content"
-                body = page.content()
-                if (
-                    save_cookies
-                    and jar is not None
-                    and context is not None
-                    and len(body) >= MIN_BODY_LENGTH
-                ):
+                    found = False
+                    # #region agent log
+                    _mark("watch_timeout")
+                    # #endregion
+                    stage = "read"
+                    try:
+                        body = read_html({"needle": "", "selector": "", "must": ""}, 10)
+                    except playwright_timeout:
+                        log("fetch failed: the page never finished loading")
+                        return None, "fetch failed"
+                # #region agent log
+                _mark("read")
+                # #endregion
+                final_path = urllib.parse.urlparse(page.url).path
+                # #region agent log
+                _agent_debug(
+                    "I",
+                    "watchpage.py:render_page",
+                    "render finished",
+                    {
+                        "found": found,
+                        "elapsed_ms": int((datetime.now().timestamp() - started) * 1000),
+                        "body_len": len(body or ""),
+                        "kept_path": stay["path"],
+                        "final_path": final_path[:120],
+                        "blocked": stay["blocked"],
+                        "documents": stay["documents"],
+                        "must_contain": must_contain,
+                        "must_contain_seen": bool(must_contain)
+                        and must_contain.casefold() in (body or "").casefold(),
+                        "url_id_seen": url.rstrip("/").split("/")[-1].split("?")[0]
+                        in (body or ""),
+                        "watch_value": watch["value"] if watch else None,
+                        "watch_seen": bool(watch)
+                        and watch["value"].casefold() in (body or "").casefold(),
+                        "marks_ms": _marks,
+                        "routes": {k: v for k, v in _routes.items() if k != "last"},
+                    },
+                )
+                # #endregion
+                if not body:
+                    log("fetch failed: the page never finished loading")
+                    return None, "fetch failed"
+                if stay["path"] is not None and final_path != stay["path"]:
+                    log(f"fetch failed: the page moved to {final_path}")
+                    return None, "fetch failed"
+                if save_cookies and jar is not None and len(body) >= MIN_BODY_LENGTH:
                     store_playwright_cookies(jar, context.cookies())
                     save_cookie_jar(jar)
             except Exception as exc:
@@ -706,12 +815,6 @@ def render_page(
                             "close_type": type(close_exc).__name__,
                             "close_error": str(close_exc)[:500],
                             "had_failure": failure is not None,
-                            "failure_type": (
-                                type(failure).__name__ if failure is not None else None
-                            ),
-                            "failure_error": (
-                                str(failure)[:500] if failure is not None else None
-                            ),
                         },
                     )
                     # #endregion
@@ -726,14 +829,7 @@ def render_page(
             "E",
             "watchpage.py:render_page",
             "render failed",
-            {
-                "stage": stage,
-                "type": type(exc).__name__,
-                "error": message[:800],
-                "cause": (
-                    str(exc.__cause__)[:400] if exc.__cause__ is not None else None
-                ),
-            },
+            {"stage": stage, "type": type(exc).__name__, "error": message[:800]},
         )
         # #endregion
         if "Executable doesn't exist" in message or "playwright install" in message:
@@ -756,6 +852,10 @@ def fetch_page(
     cookies_file: Path | None = None,
     user_agent: str | None = None,
     save_cookies: bool = False,
+    watch: dict[str, str] | None = None,
+    must_contain: str = "",
+    headers: dict[str, str] | None = None,
+    min_length: int = MIN_BODY_LENGTH,
 ) -> tuple[str | None, str | None]:
     """Return (body, None) or (None, reason)."""
     agent = user_agent or USER_AGENT
@@ -766,8 +866,11 @@ def fetch_page(
             user_agent=agent,
             jar=jar,
             save_cookies=save_cookies and jar is not None,
+            watch=watch,
+            must_contain=must_contain,
+            headers=headers,
         )
-    request = urllib.request.Request(url, headers={"User-Agent": agent})
+    request = urllib.request.Request(url, headers={"User-Agent": agent, **(headers or {})})
     try:
         if jar is None:
             response_cm = urllib.request.urlopen(request, timeout=FETCH_TIMEOUT_SECONDS)
@@ -789,7 +892,7 @@ def fetch_page(
     if status != 200:
         log(f"fetch failed: HTTP {status}")
         return None, "fetch failed"
-    if len(body) < MIN_BODY_LENGTH:
+    if len(body) < min_length:
         log(f"page too short ({len(body)} bytes); skipping")
         return None, "page too short"
     if save_cookies and jar is not None:
@@ -802,13 +905,64 @@ def fetch_configured_page(
 ) -> tuple[str | None, str | None]:
     cookies_file = config.get("cookies_file")
     user_agent = config.get("user_agent")
+    watch = config.get("watch")
+    is_json = isinstance(watch, dict) and watch.get("kind") == "json"
+    headers = config.get("headers")
     return fetch_page(
-        str(config["page_url"]),
+        str(config.get("fetch_url") or config["page_url"]),
         render_javascript=bool(config["render_javascript"]),
         cookies_file=cookies_file if isinstance(cookies_file, Path) else None,
         user_agent=str(user_agent) if user_agent else None,
         save_cookies=save_cookies,
+        watch=watch if isinstance(watch, dict) else None,
+        must_contain=str(config.get("must_contain") or ""),
+        headers=headers if isinstance(headers, dict) else None,
+        # A JSON reply can be a few bytes. Parsing it is the real check.
+        min_length=2 if is_json else MIN_BODY_LENGTH,
     )
+
+
+def json_values(body: str, watch: dict[str, str]) -> tuple[bool, list[object]]:
+    """Return (any JSON parsed, every value at watch["path"]).
+
+    The JSON is the whole body, or the text of each element matching
+    watch["script"], such as script#__NEXT_DATA__ or
+    script[type="application/ld+json"]. "*" in the path matches every item
+    of a list or object.
+    """
+    script = watch.get("script")
+    if script:
+        tags = import_beautifulsoup()(body, "html.parser").select(script)
+        sources = [tag.get_text() for tag in tags]
+    else:
+        sources = [body]
+    parsed = False
+    found: list[object] = []
+    for source in sources:
+        try:
+            current = [json.loads(source)]
+        except ValueError:
+            continue
+        parsed = True
+        for part in watch["path"].split("."):
+            following: list[object] = []
+            for item in current:
+                if part == "*" and isinstance(item, list):
+                    following.extend(item)
+                elif part == "*" and isinstance(item, dict):
+                    following.extend(item.values())
+                elif isinstance(item, dict) and part in item:
+                    following.append(item[part])
+                elif isinstance(item, list) and part.isdigit() and int(part) < len(item):
+                    following.append(item[int(part)])
+            current = following
+        found.extend(current)
+    return parsed, found
+
+
+def json_text(value: object) -> str:
+    """JSON true is "true", null is "null", and a string is itself."""
+    return value if isinstance(value, str) else json.dumps(value)
 
 
 def page_matches(body: str, watch: dict[str, str]) -> bool:
@@ -825,14 +979,24 @@ def page_matches(body: str, watch: dict[str, str]) -> bool:
 
 
 def classify_page(body: str, config: dict[str, object]) -> str:
-    """Return triggered, waiting, or unexpected."""
+    """Return triggered, waiting, unexpected, or no_value."""
     must = str(config.get("must_contain") or "")
     if must and must.casefold() not in body.casefold():
         return "unexpected"
     watch = config["watch"]
     if not isinstance(watch, dict):
         raise SystemExit("Config watch must be an object.")
-    matched = page_matches(body, watch)
+    if watch["kind"] == "json":
+        parsed, values = json_values(body, watch)
+        # Nothing at the path can only mean "not there yet" for a present
+        # watch. For an absent watch it could be a changed reply, so it never
+        # alerts.
+        if not parsed or (not values and watch["alert_when"] == "absent"):
+            return "no_value"
+        wanted = watch["value"].casefold()
+        matched = any(json_text(item).casefold() == wanted for item in values)
+    else:
+        matched = page_matches(body, watch)
     if watch["alert_when"] == "present":
         return "triggered" if matched else "waiting"
     return "waiting" if matched else "triggered"
@@ -847,6 +1011,10 @@ def assess(
     status = classify_page(body, config)
     if status == "unexpected":
         return "not_checked", "page did not contain the expected text"
+    if status == "no_value":
+        watch = config["watch"]
+        path = watch.get("path") if isinstance(watch, dict) else ""
+        return "not_checked", f"no JSON value at {path}"
     if status == "triggered":
         return "triggered", ""
     return "not_triggered", ""
@@ -1335,12 +1503,12 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_record:
         clear_fetch_failures(state)
 
-    outcome, _detail = assess(body, problem, config)
+    outcome, detail = assess(body, problem, config)
     if outcome == "not_triggered":
         log("still waiting")
         return 0
     if outcome == "not_checked":
-        log("page did not contain the expected text; skipping")
+        log(f"{detail}; skipping")
         return 0
 
     log("watch triggered")

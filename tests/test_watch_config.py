@@ -107,7 +107,53 @@ class WatchConfigTest(unittest.TestCase):
             self.base(watch={"kind": "xpath", "value": "//a", "alert_when": "present"}),
         )
         self.assert_parse_error(
-            path, 'Parsing error on watch.json: kind must be "text" or "css"'
+            path, 'Parsing error on watch.json: kind must be "text", "css", or "json"'
+        )
+
+    def test_json_watch_reads_check_url_headers_path_and_script(self):
+        path = write_config(
+            self.tmp,
+            self.base(
+                check_url="https://api.example.com/stock/42",
+                headers={"Accept": "application/json"},
+                watch={
+                    "kind": "json",
+                    "path": "offers.*.availability",
+                    "value": "InStock",
+                    "script": 'script[type="application/ld+json"]',
+                    "alert_when": "present",
+                },
+            ),
+        )
+        config = watchpage.load_watch_config(path)
+        self.assertEqual(config["fetch_url"], "https://api.example.com/stock/42")
+        self.assertEqual(config["page_url"], "https://example.com/product")
+        self.assertEqual(config["headers"], {"Accept": "application/json"})
+        self.assertEqual(config["watch"]["path"], "offers.*.availability")
+        self.assertEqual(config["watch"]["script"], 'script[type="application/ld+json"]')
+
+    def test_check_url_defaults_to_url(self):
+        config = watchpage.load_watch_config(write_config(self.tmp, self.base()))
+        self.assertEqual(config["fetch_url"], "https://example.com/product")
+        self.assertEqual(config["headers"], {})
+
+    def test_json_watch_needs_a_path(self):
+        path = write_config(
+            self.tmp,
+            self.base(watch={"kind": "json", "value": "true", "alert_when": "present"}),
+        )
+        self.assert_parse_error(path, "Parsing error on watch.json: Missing path key")
+
+    def test_check_url_must_be_http(self):
+        path = write_config(self.tmp, self.base(check_url="ftp://example.com/stock"))
+        self.assert_parse_error(
+            path, "Parsing error on watch.json: check_url must start with http:// or https://"
+        )
+
+    def test_headers_must_be_text(self):
+        path = write_config(self.tmp, self.base(headers={"X-Count": 3}))
+        self.assert_parse_error(
+            path, "Parsing error on watch.json: headers must be an object of text values"
         )
 
     def test_unknown_alert_when(self):

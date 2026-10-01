@@ -84,9 +84,11 @@ cp config.example.json config.json
 python3 watchpage.py --config config.json
 ```
 
-- `url` is the page to fetch.
+- `url` is the page to fetch. It is also the link `{url}` puts in the text.
+- `check_url` is optional. When set, the check fetches this address in place of `url`, such as a store's stock endpoint. The text still links to `url`.
+- `headers` is optional. It is an object of extra request headers, such as `{"Accept": "application/json"}`.
 - `to_numbers` is the list of E.164 numbers that receive this watch's text.
-- `watch.kind` is `text` or `css`. `watch.value` is the phrase, or a CSS selector. `watch.alert_when` is `present` or `absent`. Text matching ignores case.
+- `watch.kind` is `text`, `css`, or `json`. `watch.value` is the phrase, a CSS selector, or the JSON value to compare. `watch.alert_when` is `present` or `absent`. Text matching ignores case. A `json` watch is described under [Stock from a JSON endpoint](#stock-from-a-json-endpoint).
 - `message` is the SMS body. `{url}` and `{name}` are replaced. The default is `Change detected: {url}`.
 - `must_contain` is optional. A page without that text is skipped.
 - `name` is a short id. It sets the default cron comment, `watchpage:<name>`, and the default state file, `state/<name>.json`.
@@ -190,6 +192,39 @@ The four watches above download the HTML and stop there. Playwright is not impor
 }
 ```
 
+### Stock from a JSON endpoint
+
+Most store pages load stock status separately, as JSON, after the page arrives. The first HTML can say "out of stock" for every item. A `json` watch reads that JSON directly with one plain request, in well under a second, with no browser.
+
+- `watch.path` is a dotted path into the JSON, such as `isAvailable` or `offers.availability`. A number picks a list item, as in `items.0.status`. `*` matches every item of a list or object, as in `offers.*.availability`.
+- `watch.value` is compared with the value at that path, ignoring case. JSON `true` is `"true"`, `null` is `"null"`, and a number is its digits.
+- `alert_when` `present` texts when any value at the path equals `watch.value`. `absent` texts when none does.
+- `watch.script` is optional. It is a CSS selector for script tags in an HTML page that hold JSON, such as `script#__NEXT_DATA__` or `script[type="application/ld+json"]`. Each matching tag is read.
+- A reply that is not JSON is logged as `no JSON value at <path>` and skipped like a page without `must_contain`. It cannot set off the alert.
+- When the JSON has nothing at the path, a `present` watch keeps waiting, since a store often leaves out an entry until the item is stocked. An `absent` watch skips that reply, so a changed reply cannot set off the alert.
+- A JSON reply can be short, so the 500-character minimum is waived for this kind.
+
+Texts when Costco reports an item available. `check_url` is the stock endpoint, and `url` stays the product page the text links to:
+
+```json
+{
+  "name": "costco-prismatic",
+  "url": "https://www.costco.ca/p/-/pokmon-tcg-prismatic-evolutions-super-premium-collection/4000415442?langId=-24",
+  "check_url": "https://www.costco.ca/AjaxSCInventoryUpdate?itemNumber=2600511&warehouseNo=894&clientId=e442e6e6-2602-4a39-937b-8b28b4457ed3",
+  "to_numbers": ["+14165550101"],
+  "message": "Prismatic Evolutions is in stock at Costco: {url}",
+  "must_contain": "2600511",
+  "watch": {
+    "kind": "json",
+    "path": "isAvailable",
+    "value": "true",
+    "alert_when": "present"
+  }
+}
+```
+
+To find the JSON on another site, open the product page in Chrome, then DevTools, the Network tab, and the Fetch/XHR filter, and reload. Search the responses for `stock` or `availab`. Right-click the match and choose Copy as cURL, then run it in a terminal to confirm it answers without the browser. If no request carries the stock, search the page source for `__NEXT_DATA__` or `application/ld+json` and use `watch.script`.
+
 ## Import cookies from a browser
 
 Use this when you are already logged in, or you have already passed a captcha, and the watch should see that same page. The import reads one browser profile and one domain. It does not scan every browser, and it does not take a parent domain or any other subdomain. Cron does not talk to the browser. It sends the cookie file written here.
@@ -278,8 +313,8 @@ A page that does not meet the condition logs `still waiting`. A failed fetch is 
 
 ## What has to be true before the text goes out
 
-- The check returns HTTP 200 and a body of at least 500 characters. With `render_javascript` that body is the page after scripts run
+- The check returns HTTP 200 and a body of at least 500 characters, or valid JSON for a `json` watch. With `render_javascript` that body is the page after scripts run
 - If `must_contain` is set, that text is in the body
 - The watch condition is met
 
-Text is a case-insensitive substring. CSS uses BeautifulSoup's `select` on the HTML. `alert_when` `present` texts when the phrase or selector matches. `alert_when` `absent` texts when it does not.
+Text is a case-insensitive substring. CSS uses BeautifulSoup's `select` on the HTML. JSON compares the value at `watch.path`. `alert_when` `present` texts when the phrase, selector, or value matches. `alert_when` `absent` texts when it does not.

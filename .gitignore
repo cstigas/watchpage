@@ -1,5 +1,7 @@
 .env
 config.json
+config.*.json
+!config.example.json
 state.json
 state.json.tmp
 state/

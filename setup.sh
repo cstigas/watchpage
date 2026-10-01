@@ -98,7 +98,10 @@ with sync_playwright() as playwright:
         print("missing-browser")
         raise SystemExit(0)
     try:
-        browser = playwright.chromium.launch(headless=True)
+        browser = playwright.chromium.launch(
+            headless=True,
+            args=["--disable-dev-shm-usage", "--disable-gpu"],
+        )
         browser.close()
     except Exception as exc:
         text = str(exc)
