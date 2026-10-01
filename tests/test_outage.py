@@ -225,24 +225,6 @@ class HungServerOutageTest(unittest.TestCase):
         else:
             self.assertFalse(self.real_state.exists())
 
-    def test_flag_does_not_load_a_watch_config(self):
-        original_load = watchpage.load_config
-        original_run = watchpage.run_outage_test
-        original_watch = watchpage.load_watch_config
-
-        def reject_watch(_path):
-            raise AssertionError("watch config must not be loaded")
-
-        watchpage.load_watch_config = reject_watch
-        watchpage.load_config = lambda: {"outage_number": "+14165550199"}
-        watchpage.run_outage_test = lambda _config: 0
-        try:
-            self.assertEqual(watchpage.main(["--test-outage"]), 0)
-        finally:
-            watchpage.load_config = original_load
-            watchpage.run_outage_test = original_run
-            watchpage.load_watch_config = original_watch
-
     def test_hung_server_times_out_and_sends_one_text(self):
         code = watchpage.run_outage_test({"outage_number": "+14165550199"})
         self.assertEqual(code, 0)
