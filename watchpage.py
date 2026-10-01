@@ -530,6 +530,36 @@ def store_playwright_cookies(jar: http.cookiejar.CookieJar, items: list[dict]) -
         )
 
 
+def _agent_debug(hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    # #region agent log
+    payload = {
+        "sessionId": "19edcd",
+        "runId": "pre-fix",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": int(datetime.now().timestamp() * 1000),
+    }
+    line = json.dumps(payload, default=str)
+    paths = []
+    for path in (
+        Path("/Users/cstigas/Projects/christmas-town-watch/.cursor/debug-19edcd.log"),
+        ROOT / ".cursor" / "debug-19edcd.log",
+    ):
+        resolved = path.resolve()
+        if resolved not in paths:
+            paths.append(resolved)
+    for path in paths:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+        except Exception:
+            pass
+    # #endregion
+
+
 def render_page(
     url: str,
     *,
@@ -541,28 +571,102 @@ def render_page(
     sync_playwright, playwright_timeout = import_playwright()
     agent = user_agent or USER_AGENT
     log("rendering page in a headless browser")
+    stage = "start"
+    # #region agent log
+    _agent_debug(
+        "A",
+        "watchpage.py:render_page",
+        "render start",
+        {
+            "has_cookies": jar is not None,
+            "cookie_count": len(list(jar)) if jar is not None else 0,
+            "user_agent_set": bool(user_agent),
+        },
+    )
+    # #endregion
     try:
         with sync_playwright() as playwright:
+            stage = "launch"
             browser = playwright.chromium.launch(headless=True)
+            # #region agent log
+            _agent_debug(
+                "A",
+                "watchpage.py:render_page",
+                "browser launched",
+                {"browser_type": type(browser).__name__},
+            )
+            # #endregion
+            failure = None
             try:
                 context = None
                 if jar is None:
+                    stage = "new_page"
                     page = browser.new_page(user_agent=agent)
                 else:
+                    stage = "new_context"
                     context = browser.new_context(user_agent=agent)
                     payload = playwright_cookie_payload(jar, url)
+                    # #region agent log
+                    _agent_debug(
+                        "C",
+                        "watchpage.py:render_page",
+                        "cookie payload ready",
+                        {
+                            "payload_count": len(payload),
+                            "missing_domain": sum(
+                                1 for item in payload if not item.get("domain")
+                            ),
+                            "expired": sum(
+                                1
+                                for item in payload
+                                if isinstance(item.get("expires"), int)
+                                and item["expires"] < int(datetime.now().timestamp())
+                            ),
+                        },
+                    )
+                    # #endregion
                     if payload:
+                        stage = "add_cookies"
                         try:
                             context.add_cookies(payload)
-                        except Exception:
+                        except Exception as cookie_exc:
+                            # #region agent log
+                            _agent_debug(
+                                "C",
+                                "watchpage.py:render_page",
+                                "add_cookies failed",
+                                {
+                                    "type": type(cookie_exc).__name__,
+                                    "error": str(cookie_exc)[:500],
+                                },
+                            )
+                            # #endregion
                             log("fetch failed: could not apply cookies")
                             return None, "fetch failed"
+                    stage = "new_page"
                     page = context.new_page()
+                stage = "goto"
+                # #region agent log
+                _agent_debug(
+                    "B",
+                    "watchpage.py:render_page",
+                    "before goto",
+                    {"stage": stage},
+                )
+                # #endregion
                 response = page.goto(
                     url,
                     wait_until="load",
                     timeout=FETCH_TIMEOUT_SECONDS * 1000,
                 )
+                # #region agent log
+                _agent_debug(
+                    "B",
+                    "watchpage.py:render_page",
+                    "after goto",
+                    {"status": None if response is None else response.status},
+                )
+                # #endregion
                 if response is None:
                     log("fetch failed: no response")
                     return None, "fetch failed"
@@ -570,9 +674,11 @@ def render_page(
                     log(f"fetch failed: HTTP {response.status}")
                     return None, "fetch failed"
                 try:
+                    stage = "networkidle"
                     page.wait_for_load_state("networkidle", timeout=5000)
                 except playwright_timeout:
                     pass
+                stage = "content"
                 body = page.content()
                 if (
                     save_cookies
@@ -582,20 +688,59 @@ def render_page(
                 ):
                     store_playwright_cookies(jar, context.cookies())
                     save_cookie_jar(jar)
+            except Exception as exc:
+                failure = exc
+                raise
             finally:
-                browser.close()
+                stage_at_close = stage
+                try:
+                    browser.close()
+                except Exception as close_exc:
+                    # #region agent log
+                    _agent_debug(
+                        "D",
+                        "watchpage.py:render_page",
+                        "browser.close failed",
+                        {
+                            "stage": stage_at_close,
+                            "close_type": type(close_exc).__name__,
+                            "close_error": str(close_exc)[:500],
+                            "had_failure": failure is not None,
+                            "failure_type": (
+                                type(failure).__name__ if failure is not None else None
+                            ),
+                            "failure_error": (
+                                str(failure)[:500] if failure is not None else None
+                            ),
+                        },
+                    )
+                    # #endregion
+                    if failure is None:
+                        raise
     except SystemExit:
         raise
     except Exception as exc:
         message = str(exc)
+        # #region agent log
+        _agent_debug(
+            "E",
+            "watchpage.py:render_page",
+            "render failed",
+            {
+                "stage": stage,
+                "type": type(exc).__name__,
+                "error": message[:800],
+                "cause": (
+                    str(exc.__cause__)[:400] if exc.__cause__ is not None else None
+                ),
+            },
+        )
+        # #endregion
         if "Executable doesn't exist" in message or "playwright install" in message:
             raise SystemExit(
                 "Headless Chromium is not installed. Run ./setup.sh and answer yes when asked about headless Chromium."
             ) from exc
-        if jar is not None:
-            log(f"fetch failed: {type(exc).__name__}")
-        else:
-            log(f"fetch failed: {message}")
+        log(f"fetch failed at {stage}: {type(exc).__name__}: {message}")
         return None, "fetch failed"
 
     if len(body) < MIN_BODY_LENGTH:

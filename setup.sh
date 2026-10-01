@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Create a local virtualenv and install anything missing from requirements.txt.
-# Then ask whether to install Playwright and headless Chromium,
+# Then check headless Chromium. Install it when it is missing and you say yes.
+# If the browser is present but cannot start, print the library command.
 # and whether to install a cron job for a watch config.
 # Uses .venv in this directory, so it does not need root.
 # Exits 1 when Python is missing or too old, or when the venv module is missing.
@@ -71,28 +72,129 @@ PY
 
 install_requirements requirements.txt
 
-install_browser=0
-if ( : <>/dev/tty ) 2>/dev/null; then
-  exec 3<>/dev/tty
-  echo "A headless browser renders pages whose text appears only after JavaScript runs." >&3
-  echo "That check is slower, uses much more memory, and is no longer a simple download." >&3
-  echo "Skip this unless a watch sets render_javascript to true." >&3
-  printf "Install headless Chromium? [y/N] " >&3
-  read -r answer <&3
-  exec 3<&-
-  case "${answer}" in
-    [yY]|[yY][eE][sS]) install_browser=1 ;;
-    *) echo "Skipping headless Chromium." ;;
-  esac
-else
-  echo "No terminal attached, so headless Chromium was not installed."
-fi
+chromium_state() {
+  .venv/bin/python - <<'PY'
+import sys
+from pathlib import Path
 
-if [[ "${install_browser}" -eq 1 ]]; then
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:
+    print("missing-package")
+    raise SystemExit(0)
+
+with sync_playwright() as playwright:
+    try:
+        executable = Path(playwright.chromium.executable_path)
+    except Exception as exc:
+        text = str(exc)
+        if "Executable doesn't exist" in text or "playwright install" in text:
+            print("missing-browser")
+        else:
+            print("launch-failed")
+            print(f"{type(exc).__name__}: {exc}")
+        raise SystemExit(0)
+    if not executable.is_file():
+        print("missing-browser")
+        raise SystemExit(0)
+    try:
+        browser = playwright.chromium.launch(headless=True)
+        browser.close()
+    except Exception as exc:
+        text = str(exc)
+        if "Executable doesn't exist" in text or "playwright install" in text:
+            print("missing-browser")
+        else:
+            print("launch-failed")
+            print(f"{type(exc).__name__}: {exc}")
+        raise SystemExit(0)
+print("installed")
+PY
+}
+
+install_chromium() {
   install_requirements requirements-browser.txt
   echo "Installing headless Chromium. This download is large."
   .venv/bin/python -m playwright install chromium
-fi
+  if [[ "$(uname -s)" == "Linux" && "$(id -u)" -eq 0 ]]; then
+    .venv/bin/python -m playwright install-deps chromium
+  fi
+}
+
+report_launch_failure() {
+  local detail="$1"
+  echo "Headless Chromium is installed but did not start."
+  if [[ -n "${detail}" ]]; then
+    echo "${detail}"
+  fi
+  if [[ "$(uname -s)" == "Linux" ]]; then
+    echo "Install its system libraries once with:"
+    echo "  sudo .venv/bin/python -m playwright install-deps chromium"
+  fi
+}
+
+browser_state=""
+browser_detail=""
+while IFS= read -r line; do
+  if [[ -z "${browser_state}" ]]; then
+    browser_state="${line}"
+  elif [[ -z "${browser_detail}" ]]; then
+    browser_detail="${line}"
+  fi
+done < <(chromium_state)
+
+case "${browser_state}" in
+  installed)
+    echo "Headless Chromium is installed."
+    ;;
+  launch-failed)
+    report_launch_failure "${browser_detail}"
+    ;;
+  missing-package|missing-browser)
+    install_browser=0
+    if ( : <>/dev/tty ) 2>/dev/null; then
+      exec 3<>/dev/tty
+      echo "Headless Chromium is not installed." >&3
+      echo "A headless browser renders pages whose text appears only after JavaScript runs." >&3
+      echo "That check is slower, uses much more memory, and is no longer a simple download." >&3
+      echo "Skip this unless a watch sets render_javascript to true." >&3
+      printf "Install headless Chromium? [y/N] " >&3
+      read -r answer <&3
+      exec 3<&-
+      case "${answer}" in
+        [yY]|[yY][eE][sS]) install_browser=1 ;;
+        *) echo "Skipping headless Chromium." ;;
+      esac
+    else
+      echo "Headless Chromium is not installed."
+      echo "No terminal attached, so headless Chromium was not installed."
+    fi
+    if [[ "${install_browser}" -eq 1 ]]; then
+      install_chromium
+      browser_state=""
+      browser_detail=""
+      while IFS= read -r line; do
+        if [[ -z "${browser_state}" ]]; then
+          browser_state="${line}"
+        elif [[ -z "${browser_detail}" ]]; then
+          browser_detail="${line}"
+        fi
+      done < <(chromium_state)
+      if [[ "${browser_state}" == "installed" ]]; then
+        echo "Headless Chromium is installed."
+      elif [[ "${browser_state}" == "launch-failed" ]]; then
+        report_launch_failure "${browser_detail}"
+      else
+        echo "Headless Chromium is still not installed." >&2
+        exit 1
+      fi
+    fi
+    ;;
+  *)
+    echo "Could not check headless Chromium." >&2
+    exit 1
+    ;;
+esac
 
 run_cron_setup() {
   local action="$1"
