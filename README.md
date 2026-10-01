@@ -36,7 +36,7 @@ watchpage needs Python 3.10 or newer. It runs on macOS and Linux. Text watches u
 ./setup.sh
 ```
 
-After the small install, the script asks whether to install headless Chromium. The default answer is no. Answer yes only for a watch that sets `render_javascript` to `true`. That check is slower, uses much more memory, and is no longer a simple download. Pressing Enter skips it.
+After the small install, the script asks whether to install headless Chromium. The default answer is no. Answer yes only for a watch that sets `render_javascript` to `true`. That check is slower, uses much more memory, and is no longer a simple download. Pressing Enter skips it. It then asks whether to install a cron job. Pressing Enter skips that too.
 
 Run the watcher with `.venv/bin/python` after that, including from cron, so a CSS watch can import BeautifulSoup.
 
@@ -226,8 +226,9 @@ A later check sends those cookies and, when the page comes back in full, saves `
 
 ## Schedule a check
 
+`./setup.sh` can install the cron line. When several watch configs are in this directory, it asks which one. The schedule defaults to every minute. The line uses absolute paths, names the lock and log files from the config's `name`, and ends with that config's `cron_marker`. Running `./setup.sh` again does not add a second copy. If that line is already commented out, the script offers to uncomment it.
 
-Run `crontab -e` and add one line per config. The five fields at the start of the line are the schedule. `* * * * *` runs every minute; change them to whatever interval you want. The comment at the end must match that config's `cron_marker`. After every number has received the alert, watchpage finds the line by that comment and comments it out, which is what stops the repeat texts. The marker is read only from the comment, so a directory path that contains the same words does not disable a different watch.
+To add the line yourself, run `crontab -e` and add one line per config. The five fields at the start of the line are the schedule. `* * * * *` runs every minute; change them to whatever interval you want. The comment at the end must match that config's `cron_marker`. After every number has received the alert, watchpage finds the line by that comment and comments it out, which is what stops the repeat texts. The marker is read only from the comment, so a directory path that contains the same words does not disable a different watch.
 
 For the tickets example, the marker is `watchpage:summer-tickets`. Use the directory where you installed watchpage in place of `/path/to/watchpage`:
 
@@ -241,7 +242,7 @@ Another watch uses its own lock, log, config, and marker. With the default marke
 * * * * * flock -n /path/to/watchpage/shop-cart.lock /path/to/watchpage/.venv/bin/python /path/to/watchpage/watchpage.py --config /path/to/watchpage/shop-cart.json >> /path/to/watchpage/shop-cart.log 2>&1 # watchpage:shop-cart
 ```
 
-`flock` skips a run when the previous one is still going. It is standard on Linux. On macOS, install it or leave it off the command. Confirm the job with `crontab -l`.
+`flock` skips a run when the previous one is still going. It is standard on Linux. On macOS, install it or leave it off the command. `./setup.sh` includes `flock` when that command is installed. When it is not, the script prints a warning before adding the line. Confirm the job with `crontab -l`.
 
 ## See whether the watch is triggered
 
