@@ -13,6 +13,7 @@ import http.cookiejar
 import json
 import os
 import re
+import shlex
 import socket
 import subprocess
 import sys
@@ -816,6 +817,200 @@ def comment_out_cron(marker: str) -> None:
         log(f"could not update crontab: {result.stderr.strip()}")
         return
     log(f"commented out {marker} in crontab")
+
+
+def _validate_schedule(schedule: str) -> str:
+    if not isinstance(schedule, str):
+        raise SystemExit(
+            "A schedule is five cron fields, such as * * * * * for every minute "
+            "or 0 * * * * for every hour."
+        )
+    fields = schedule.split()
+    field_re = re.compile(r"[0-9A-Za-z*,/-]+")
+    if len(fields) != 5 or any(field_re.fullmatch(field) is None for field in fields):
+        raise SystemExit(
+            "A schedule is five cron fields, such as * * * * * for every minute "
+            "or 0 * * * * for every hour."
+        )
+    return " ".join(fields)
+
+
+def _validate_cron_marker(marker: str) -> str:
+    if not isinstance(marker, str):
+        raise SystemExit("cron_marker must be one line and must not contain #")
+    marker = marker.strip()
+    if not marker or any(char in marker for char in "\r\n#"):
+        raise SystemExit("cron_marker must be one line and must not contain #")
+    return marker
+
+
+def _cron_safe_text(text: str) -> str:
+    if any(char in text for char in "\r\n#"):
+        raise SystemExit(f"path cannot contain # or a newline: {text}")
+    return text
+
+
+def cron_line_state(line: str, marker: str) -> str | None:
+    """Return active, commented, or None for this marker.
+
+    A commented-out job starts with #. The marker is read only from the
+    comment, using the same token rule as comment_out_cron.
+    """
+    marker = _validate_cron_marker(marker)
+    if comment_contains_marker(line, marker):
+        return "active"
+    stripped = line.lstrip(" \t")
+    if not stripped.startswith("#"):
+        return None
+    body = stripped[1:]
+    if body.startswith(" "):
+        body = body[1:]
+    if comment_contains_marker(body, marker):
+        return "commented"
+    return None
+
+
+def _read_user_crontab() -> list[str]:
+    try:
+        listed = subprocess.run(
+            ["crontab", "-l"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise SystemExit(
+            "crontab is not installed; add the scheduled job by hand"
+        ) from exc
+    if listed.returncode != 0:
+        if "no crontab" in listed.stderr.lower():
+            return []
+        detail = listed.stderr.strip() or "could not read crontab"
+        raise SystemExit(detail)
+    return listed.stdout.splitlines()
+
+
+def _write_user_crontab(lines: list[str]) -> None:
+    result = subprocess.run(
+        ["crontab", "-"],
+        input="\n".join(lines) + "\n",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or "could not update crontab"
+        raise SystemExit(f"could not update crontab: {detail}")
+
+
+def cron_job_state(marker: str) -> tuple[str, list[str]]:
+    """Return active, commented, or missing, plus the matching lines."""
+    marker = _validate_cron_marker(marker)
+    return _classify_crontab(_read_user_crontab(), marker)
+
+
+def _uncomment_cron_line(line: str) -> str:
+    index = 0
+    while index < len(line) and line[index] in " \t":
+        index += 1
+    if index >= len(line) or line[index] != "#":
+        return line
+    rest = line[index + 1 :]
+    if rest.startswith(" "):
+        rest = rest[1:]
+    return line[:index] + rest
+
+
+def build_cron_line(
+    schedule: str,
+    root: Path,
+    config_path: Path,
+    name: str,
+    marker: str,
+    flock_bin: str | None,
+) -> str:
+    """One crontab line. The marker sits in the comment so it can be turned off."""
+    schedule = _validate_schedule(schedule)
+    marker = _validate_cron_marker(marker)
+    if not NAME_RE.fullmatch(name):
+        raise SystemExit(
+            "name must be letters, digits, dots, hyphens, or underscores"
+        )
+    root = root.resolve()
+    config_path = config_path.resolve()
+    command: list[str] = []
+    if flock_bin:
+        lock_path = root / f"{name}.lock"
+        command.append(shlex.quote(_cron_safe_text(flock_bin)))
+        command.append("-n")
+        command.append(shlex.quote(_cron_safe_text(str(lock_path))))
+    python_bin = root / ".venv" / "bin" / "python"
+    script = root / "watchpage.py"
+    log_path = root / f"{name}.log"
+    command.extend(
+        [
+            shlex.quote(_cron_safe_text(str(python_bin))),
+            shlex.quote(_cron_safe_text(str(script))),
+            "--config",
+            shlex.quote(_cron_safe_text(str(config_path))),
+        ]
+    )
+    quoted_log = shlex.quote(_cron_safe_text(str(log_path)))
+    return f"{schedule} {' '.join(command)} >> {quoted_log} 2>&1 # {marker}"
+
+
+def _classify_crontab(lines: list[str], marker: str) -> tuple[str, list[str]]:
+    active: list[str] = []
+    commented: list[str] = []
+    for line in lines:
+        state = cron_line_state(line, marker)
+        if state == "active":
+            active.append(line)
+        elif state == "commented":
+            commented.append(line)
+    if active:
+        return "active", active
+    if commented:
+        return "commented", commented
+    return "missing", []
+
+
+def install_cron_job(marker: str, line: str) -> str:
+    """Append the watcher line when that marker is not already in crontab.
+
+    Returns installed, active, or commented. An active or commented line is
+    left as it is, so a second setup does not add a duplicate job.
+    """
+    if in_test_mode():
+        raise SystemExit("refusing to edit crontab during a test")
+    marker = _validate_cron_marker(marker)
+    lines = _read_user_crontab()
+    state, _matches = _classify_crontab(lines, marker)
+    if state != "missing":
+        return state
+    lines.append(line)
+    _write_user_crontab(lines)
+    return "installed"
+
+
+def uncomment_cron_job(marker: str) -> str:
+    """Remove the leading hash from lines this marker comments out.
+
+    Returns uncommented, active, or missing. Other crontab lines stay.
+    """
+    if in_test_mode():
+        raise SystemExit("refusing to edit crontab during a test")
+    marker = _validate_cron_marker(marker)
+    lines = _read_user_crontab()
+    state, _matches = _classify_crontab(lines, marker)
+    if state != "commented":
+        return state
+    updated = [
+        _uncomment_cron_line(line) if cron_line_state(line, marker) == "commented" else line
+        for line in lines
+    ]
+    _write_user_crontab(updated)
+    return "uncommented"
 
 
 def finish_if_complete(config: dict[str, object], state: dict[str, object]) -> bool:
