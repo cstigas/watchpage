@@ -202,6 +202,7 @@ Most store pages load stock status separately, as JSON, after the page arrives. 
 - `watch.script` is optional. It is a CSS selector for script tags in an HTML page that hold JSON, such as `script#__NEXT_DATA__` or `script[type="application/ld+json"]`. Each matching tag is read.
 - A reply that is not JSON is logged as `no JSON value at <path>` and skipped like a page without `must_contain`. It cannot set off the alert.
 - When the JSON has nothing at the path, a `present` watch keeps waiting, since a store often leaves out an entry until the item is stocked. An `absent` watch skips that reply, so a changed reply cannot set off the alert.
+- `watch.error_path` is optional. It names the field where the API reports a rejected request, such as `errorParam`. When anything is there, the run counts as a failed fetch, and repeated failures send the outage text. Without it, a reply such as Costco's answer to a bad `clientId`, HTTP 200 with `"isAvailable": false` and `"errorParam": {"Reason": "Invalid Client ID received"}`, reads as out of stock on every run.
 - A JSON reply can be short, so the 500-character minimum is waived for this kind.
 
 Texts when Costco reports an item available. `check_url` is the stock endpoint, and `url` stays the product page the text links to:
@@ -218,6 +219,7 @@ Texts when Costco reports an item available. `check_url` is the stock endpoint, 
     "kind": "json",
     "path": "isAvailable",
     "value": "true",
+    "error_path": "errorParam",
     "alert_when": "present"
   }
 }
@@ -261,7 +263,7 @@ A later check sends those cookies and, when the page comes back in full, saves `
 
 ## Schedule a check
 
-`./setup.sh` can install the cron line. When several watch configs are in this directory, it asks which one. The schedule defaults to every minute. The line uses absolute paths, names the lock and log files from the config's `name`, and ends with that config's `cron_marker`. Running `./setup.sh` again does not add a second copy. If that line is already commented out, the script offers to uncomment it.
+`./setup.sh` can install the cron line. When several watch configs are in this directory, it asks which one. The schedule defaults to every minute. The line uses absolute paths, names the lock and log files from the config's `name`, and ends with that config's `cron_marker`. Running `./setup.sh` again does not add a second copy. If that line is already commented out, the script offers to uncomment it. A config copied from another one keeps that watch's `name`, `cron_marker`, and `state_file`, so the two would share a lock, a log, and a cron line, and one alert would mark the other as sent. The script lists any of those that another config in this directory also uses, and installs nothing until each config has its own.
 
 The script also asks for a random delay, which defaults to 30 seconds. It adds `--jitter 30` to the line, so each run waits a random 0 to 30 seconds before the check. Several watches on the same site then start at different seconds, and each run starts at a new time. The log shows `waiting 12s before the check`. The delay has to leave time for the check before the next run, so the most it accepts is 50 seconds for an every-minute schedule, ten seconds short of the interval for `*/N` minutes, and 600 seconds for any other schedule. Enter `0` for none. `--dry-run` and `--test-sms` ignore `--jitter`.
 

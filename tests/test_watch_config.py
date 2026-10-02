@@ -121,11 +121,13 @@ class WatchConfigTest(unittest.TestCase):
                     "path": "offers.*.availability",
                     "value": "InStock",
                     "script": 'script[type="application/ld+json"]',
+                    "error_path": "errors",
                     "alert_when": "present",
                 },
             ),
         )
         config = watchpage.load_watch_config(path)
+        self.assertEqual(config["watch"]["error_path"], "errors")
         self.assertEqual(config["fetch_url"], "https://api.example.com/stock/42")
         self.assertEqual(config["page_url"], "https://example.com/product")
         self.assertEqual(config["headers"], {"Accept": "application/json"})
@@ -243,6 +245,28 @@ class WatchConfigTest(unittest.TestCase):
     def test_empty_user_agent(self):
         path = write_config(self.tmp, self.base(user_agent="  "))
         self.assert_parse_error(path, "Parsing error on watch.json: user_agent is empty")
+
+    def test_copied_config_reports_shared_name_marker_and_state(self):
+        original = self.tmp / "config.instore.json"
+        original.write_text(json.dumps(self.base(name="instore")), encoding="utf-8")
+        copy = self.tmp / "config.instore-copy.json"
+        copy.write_text(json.dumps(self.base(name="instore")), encoding="utf-8")
+        (self.tmp / "notes.json").write_text("[1, 2]", encoding="utf-8")
+        self.assertEqual(
+            watchpage.watch_conflicts(copy),
+            [
+                "name instore is also used by config.instore.json",
+                "cron_marker watchpage:instore is also used by config.instore.json",
+                "state_file state/instore.json is also used by config.instore.json",
+            ],
+        )
+
+    def test_distinct_configs_have_no_conflicts(self):
+        first = self.tmp / "config.one.json"
+        first.write_text(json.dumps(self.base(name="one")), encoding="utf-8")
+        second = self.tmp / "config.two.json"
+        second.write_text(json.dumps(self.base(name="two")), encoding="utf-8")
+        self.assertEqual(watchpage.watch_conflicts(second), [])
 
     def test_invalid_css_selector(self):
         path = write_config(
