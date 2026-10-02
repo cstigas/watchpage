@@ -261,6 +261,8 @@ def load_watch_config(
     selectors = [value] if kind == "css" else []
     if kind == "json":
         parsed_watch["path"] = require_text_key(path, watch, "path")
+        if "error_path" in watch:
+            parsed_watch["error_path"] = require_text_key(path, watch, "error_path")
         if "script" in watch:
             parsed_watch["script"] = require_text_key(path, watch, "script")
             selectors.append(parsed_watch["script"])
@@ -946,7 +948,7 @@ def fetch_configured_page(
     watch = config.get("watch")
     is_json = isinstance(watch, dict) and watch.get("kind") == "json"
     headers = config.get("headers")
-    return fetch_page(
+    body, problem = fetch_page(
         str(config.get("fetch_url") or config["page_url"]),
         render_javascript=bool(config["render_javascript"]),
         cookies_file=cookies_file if isinstance(cookies_file, Path) else None,
@@ -958,6 +960,28 @@ def fetch_configured_page(
         # A JSON reply can be a few bytes. Parsing it is the real check.
         min_length=2 if is_json else MIN_BODY_LENGTH,
     )
+    if body is not None and is_json:
+        error = reply_error(body, watch)
+        if error:
+            log(f"fetch failed: the reply reports an error at {watch['error_path']}: {error}")
+            return None, "fetch failed"
+    return body, problem
+
+
+def reply_error(body: str, watch: dict[str, str]) -> str | None:
+    """Text of the first non-empty value at watch["error_path"], if any.
+
+    Some APIs answer a rejected request with HTTP 200 and an error field,
+    and leave the value being watched at its "not yet" setting.
+    """
+    error_path = watch.get("error_path")
+    if not error_path:
+        return None
+    _parsed, values = json_values(body, {**watch, "path": error_path})
+    for value in values:
+        if value not in (None, "", {}, [], False):
+            return json_text(value)[:200]
+    return None
 
 
 def json_values(body: str, watch: dict[str, str]) -> tuple[bool, list[object]]:

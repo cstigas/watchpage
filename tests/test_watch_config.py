@@ -121,11 +121,13 @@ class WatchConfigTest(unittest.TestCase):
                     "path": "offers.*.availability",
                     "value": "InStock",
                     "script": 'script[type="application/ld+json"]',
+                    "error_path": "errors",
                     "alert_when": "present",
                 },
             ),
         )
         config = watchpage.load_watch_config(path)
+        self.assertEqual(config["watch"]["error_path"], "errors")
         self.assertEqual(config["fetch_url"], "https://api.example.com/stock/42")
         self.assertEqual(config["page_url"], "https://example.com/product")
         self.assertEqual(config["headers"], {"Accept": "application/json"})
