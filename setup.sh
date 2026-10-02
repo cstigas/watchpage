@@ -220,8 +220,17 @@ jitter = int(sys.argv[4])
 config = watchpage.load_watch_config(config_path, require_cookies_file=False)
 name = str(config["name"])
 marker = str(config["cron_marker"])
+conflicts = watchpage.watch_conflicts(config_path)
+if conflicts:
+    lines = "\n".join(f"  - {item}" for item in conflicts)
+    raise SystemExit(
+        f"{config_path.name} shares settings with another watch:\n{lines}\n"
+        "Give each config its own name, cron_marker, and state_file, then run ./setup.sh again."
+    )
 
-if action == "status":
+if action == "check":
+    pass
+elif action == "status":
     state, lines = watchpage.cron_job_state(marker)
     print(name)
     print(marker)
@@ -377,6 +386,10 @@ offer_cron_on_tty() {
   esac
 
   if ! config_path="$(pick_watch_config)"; then
+    return 0
+  fi
+  if ! run_cron_setup check "$config_path" >/dev/null; then
+    echo "Skipping cron."
     return 0
   fi
 
