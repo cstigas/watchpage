@@ -226,6 +226,52 @@ class InstallCronTest(unittest.TestCase):
                 None,
             )
 
+    def jitter_line(self, schedule, jitter):
+        return watchpage.build_cron_line(
+            schedule,
+            Path("/tmp/watchpage"),
+            Path("/tmp/watchpage/config.json"),
+            "summer-tickets",
+            "watchpage:summer-tickets",
+            "/usr/bin/flock",
+            jitter,
+        )
+
+    def test_line_passes_jitter_before_the_log_redirect(self):
+        root = Path("/tmp/watchpage").resolve()
+        added = self.jitter_line("* * * * *", 30)
+        self.assertIn(f"--config {root}/config.json --jitter 30 >> ", added)
+        self.assertTrue(
+            watchpage.comment_contains_marker(added, "watchpage:summer-tickets")
+        )
+
+    def test_line_without_jitter_has_no_flag(self):
+        self.assertNotIn("--jitter", self.jitter_line("* * * * *", 0))
+
+    def test_jitter_must_fit_inside_the_interval(self):
+        self.assertEqual(watchpage.max_jitter_seconds("* * * * *"), 50)
+        self.assertEqual(watchpage.max_jitter_seconds("*/5 * * * *"), 290)
+        self.assertEqual(watchpage.max_jitter_seconds("0 * * * *"), 600)
+        self.assertIn("--jitter 290", self.jitter_line("*/5 * * * *", 290))
+        for schedule, jitter in (("* * * * *", 51), ("*/5 * * * *", 300), ("* * * * *", -1)):
+            with self.assertRaises(SystemExit):
+                self.jitter_line(schedule, jitter)
+
+    def test_wait_jitter_sleeps_a_random_time_within_the_limit(self):
+        slept = []
+        original_sleep = watchpage.time.sleep
+        original_uniform = watchpage.random.uniform
+        watchpage.time.sleep = slept.append
+        watchpage.random.uniform = lambda low, high: high / 2
+        try:
+            watchpage.wait_jitter(0)
+            self.assertEqual(slept, [])
+            watchpage.wait_jitter(40)
+            self.assertEqual(slept, [20.0])
+        finally:
+            watchpage.time.sleep = original_sleep
+            watchpage.random.uniform = original_uniform
+
     def test_rejects_a_marker_with_a_hash(self):
         with self.assertRaises(SystemExit):
             watchpage.build_cron_line(

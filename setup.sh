@@ -203,7 +203,8 @@ run_cron_setup() {
   local action="$1"
   local config_path="$2"
   local schedule="${3:-}"
-  .venv/bin/python - "$action" "$config_path" "$schedule" <<'PY'
+  local jitter="${4:-0}"
+  .venv/bin/python - "$action" "$config_path" "$schedule" "$jitter" <<'PY'
 import shutil
 import sys
 from pathlib import Path
@@ -213,6 +214,9 @@ import watchpage
 action = sys.argv[1]
 config_path = Path(sys.argv[2]).resolve()
 schedule = sys.argv[3]
+if not sys.argv[4].isdigit():
+    raise SystemExit("The random delay is a whole number of seconds, such as 30.")
+jitter = int(sys.argv[4])
 config = watchpage.load_watch_config(config_path, require_cookies_file=False)
 name = str(config["name"])
 marker = str(config["cron_marker"])
@@ -234,6 +238,7 @@ elif action == "preview":
         name,
         marker,
         flock_bin,
+        jitter,
     )
     print(line)
 elif action == "install":
@@ -245,6 +250,7 @@ elif action == "install":
         name,
         marker,
         flock_bin,
+        jitter,
     )
     print(watchpage.install_cron_job(marker, line))
 elif action == "uncomment":
@@ -331,8 +337,9 @@ warn_missing_flock() {
 
 prompt_schedule() {
   local config_path="$1"
-  local attempts=0 schedule preview
+  local attempts=0 schedule jitter preview
   echo "Schedule is five cron fields. * * * * * runs every minute. 0 * * * * runs every hour." >&3
+  echo "A random delay before each check keeps several watches from starting at the same second." >&3
   while [[ "$attempts" -lt 3 ]]; do
     attempts=$((attempts + 1))
     printf "Schedule [* * * * *]: " >&3
@@ -340,8 +347,14 @@ prompt_schedule() {
     if [[ -z "$schedule" ]]; then
       schedule="* * * * *"
     fi
-    if preview="$(run_cron_setup preview "$config_path" "$schedule")"; then
+    printf "Random delay before each check, in seconds (0 for none) [30]: " >&3
+    read -r jitter <&3
+    if [[ -z "$jitter" ]]; then
+      jitter="30"
+    fi
+    if preview="$(run_cron_setup preview "$config_path" "$schedule" "$jitter")"; then
       printf '%s\n' "$schedule"
+      printf '%s\n' "$jitter"
       printf '%s\n' "$preview"
       return 0
     fi
@@ -372,7 +385,7 @@ offer_cron_on_tty() {
       echo "Skipping cron."
       return 0
     fi
-    cron_line="$(printf '%s\n' "$chosen" | sed -n '2p')"
+    cron_line="$(printf '%s\n' "$chosen" | sed -n '3p')"
     echo "crontab is not installed. Add this line by hand:" >&3
     printf '  %s\n' "$cron_line" >&3
     warn_missing_flock
@@ -420,7 +433,7 @@ offer_cron_on_tty() {
     echo "Skipping cron."
     return 0
   fi
-  cron_line="$(printf '%s\n' "$chosen" | sed -n '2p')"
+  cron_line="$(printf '%s\n' "$chosen" | sed -n '3p')"
   echo "This line will be added to your crontab:" >&3
   printf '  %s\n' "$cron_line" >&3
   warn_missing_flock
@@ -434,7 +447,7 @@ offer_cron_on_tty() {
       ;;
   esac
 
-  if ! output="$(run_cron_setup install "$config_path" "$(printf '%s\n' "$chosen" | sed -n '1p')")"; then
+  if ! output="$(run_cron_setup install "$config_path" "$(printf '%s\n' "$chosen" | sed -n '1p')" "$(printf '%s\n' "$chosen" | sed -n '2p')")"; then
     return 0
   fi
   if [[ "$output" == "installed" ]]; then
