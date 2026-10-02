@@ -126,6 +126,12 @@ class ClassifyJsonTest(unittest.TestCase):
             script='script[type="application/ld+json"]',
         )
         self.assertEqual(watchpage.classify_page(body, config), "triggered")
+        detail = watchpage.watch_detail(body, config)
+        self.assertIn('{\n  "@type": "BreadcrumbList"\n}', detail)
+        self.assertIn(
+            '{\n  "@type": "Product",\n  "offers": {\n    "availability": "https://schema.org/InStock"\n  }\n}',
+            detail,
+        )
 
     def test_reply_error_reads_a_non_empty_error_field(self):
         watch = {"kind": "json", "path": "isAvailable", "value": "true", "error_path": "errorParam"}
@@ -153,6 +159,7 @@ class ClassifyJsonTest(unittest.TestCase):
             [
                 'looking for JSON isAvailable to be "true"',
                 'isAvailable is "false", not "true", so the alert does not match',
+                '{\n  "isAvailable": false,\n  "itemNumber": "2600511"\n}',
             ],
         )
 
@@ -161,6 +168,10 @@ class ClassifyJsonTest(unittest.TestCase):
         self.assertEqual(
             watchpage.watch_detail(self.STOCK, config)[1],
             'isAvailable is "true", so the alert matches',
+        )
+        self.assertEqual(
+            watchpage.watch_detail(self.STOCK, config)[-1],
+            '{\n  "isAvailable": true,\n  "itemNumber": "2022293",\n  "count": 3\n}',
         )
         missing = json_config(
             "warehouseAvailability.inWarehouse.availability", "INSTOCK"

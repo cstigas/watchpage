@@ -984,13 +984,12 @@ def reply_error(body: str, watch: dict[str, str]) -> str | None:
     return None
 
 
-def json_values(body: str, watch: dict[str, str]) -> tuple[bool, list[object]]:
-    """Return (any JSON parsed, every value at watch["path"]).
+def json_documents(body: str, watch: dict[str, str]) -> list[object]:
+    """JSON values the watch reads, before watch["path"] is applied.
 
     The JSON is the whole body, or the text of each element matching
     watch["script"], such as script#__NEXT_DATA__ or
-    script[type="application/ld+json"]. "*" in the path matches every item
-    of a list or object.
+    script[type="application/ld+json"].
     """
     script = watch.get("script")
     if script:
@@ -998,14 +997,24 @@ def json_values(body: str, watch: dict[str, str]) -> tuple[bool, list[object]]:
         sources = [tag.get_text() for tag in tags]
     else:
         sources = [body]
-    parsed = False
-    found: list[object] = []
+    documents: list[object] = []
     for source in sources:
         try:
-            current = [json.loads(source)]
+            documents.append(json.loads(source))
         except ValueError:
             continue
-        parsed = True
+    return documents
+
+
+def json_values(body: str, watch: dict[str, str]) -> tuple[bool, list[object]]:
+    """Return (any JSON parsed, every value at watch["path"]).
+
+    "*" in the path matches every item of a list or object.
+    """
+    documents = json_documents(body, watch)
+    found: list[object] = []
+    for document in documents:
+        current = [document]
         for part in watch["path"].split("."):
             following: list[object] = []
             for item in current:
@@ -1019,7 +1028,7 @@ def json_values(body: str, watch: dict[str, str]) -> tuple[bool, list[object]]:
                     following.append(item[int(part)])
             current = following
         found.extend(current)
-    return parsed, found
+    return bool(documents), found
 
 
 def json_text(value: object) -> str:
@@ -1142,16 +1151,24 @@ def comparison_text(body: str, config: dict[str, object]) -> str:
 
 
 def watch_detail(body: str | None, config: dict[str, object]) -> list[str]:
-    """Verbose lines: the watched value, then why it did or did not match."""
+    """Verbose lines: the watched value, why it did or did not match, and for a JSON watch the whole object."""
     lines = [criterion_text(config)]
-    if body is not None:
-        lines.append(comparison_text(body, config))
+    if body is None:
+        return lines
+    lines.append(comparison_text(body, config))
+    watch = config["watch"]
+    if isinstance(watch, dict) and watch.get("kind") == "json":
+        for document in json_documents(body, watch):
+            lines.append(json.dumps(document, indent=2))
     return lines
 
 
 def log_watch_detail(body: str | None, config: dict[str, object]) -> None:
     for line in watch_detail(body, config):
-        log(line)
+        if "\n" in line:
+            print(line, flush=True)
+        else:
+            log(line)
 
 
 def classify_page(body: str, config: dict[str, object]) -> str:
