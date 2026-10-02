@@ -127,6 +127,17 @@ class ClassifyJsonTest(unittest.TestCase):
         )
         self.assertEqual(watchpage.classify_page(body, config), "triggered")
 
+    def test_reply_error_reads_a_non_empty_error_field(self):
+        watch = {"kind": "json", "path": "isAvailable", "value": "true", "error_path": "errorParam"}
+        rejected = '{"isAvailable": false, "errorParam": {"Reason": "Invalid Client ID received"}}'
+        self.assertEqual(
+            watchpage.reply_error(rejected, watch),
+            '{"Reason": "Invalid Client ID received"}',
+        )
+        for body in ('{"isAvailable": true, "errorParam": {}}', '{"isAvailable": true}'):
+            self.assertIsNone(watchpage.reply_error(body, watch))
+        self.assertIsNone(watchpage.reply_error(rejected, {**watch, "error_path": ""}))
+
     def test_assess_names_the_missing_path(self):
         config = json_config("stock.status", "true", "absent")
         self.assertEqual(

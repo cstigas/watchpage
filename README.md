@@ -202,6 +202,7 @@ Most store pages load stock status separately, as JSON, after the page arrives. 
 - `watch.script` is optional. It is a CSS selector for script tags in an HTML page that hold JSON, such as `script#__NEXT_DATA__` or `script[type="application/ld+json"]`. Each matching tag is read.
 - A reply that is not JSON is logged as `no JSON value at <path>` and skipped like a page without `must_contain`. It cannot set off the alert.
 - When the JSON has nothing at the path, a `present` watch keeps waiting, since a store often leaves out an entry until the item is stocked. An `absent` watch skips that reply, so a changed reply cannot set off the alert.
+- `watch.error_path` is optional. It names the field where the API reports a rejected request, such as `errorParam`. When anything is there, the run counts as a failed fetch, and repeated failures send the outage text. Without it, a reply such as Costco's answer to a bad `clientId`, HTTP 200 with `"isAvailable": false` and `"errorParam": {"Reason": "Invalid Client ID received"}`, reads as out of stock on every run.
 - A JSON reply can be short, so the 500-character minimum is waived for this kind.
 
 Texts when Costco reports an item available. `check_url` is the stock endpoint, and `url` stays the product page the text links to:
@@ -218,6 +219,7 @@ Texts when Costco reports an item available. `check_url` is the stock endpoint, 
     "kind": "json",
     "path": "isAvailable",
     "value": "true",
+    "error_path": "errorParam",
     "alert_when": "present"
   }
 }
