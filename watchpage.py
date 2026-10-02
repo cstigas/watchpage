@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import http.cookiejar
+import io
 import json
 import os
 import random
@@ -327,6 +329,40 @@ def load_watch_config(
         "render_javascript": render_javascript,
         "watch": parsed_watch,
     }
+
+
+def watch_conflicts(config_path: Path) -> list[str]:
+    """Other watch configs beside this one that reuse its name, cron marker, or state file.
+
+    Two watches sharing any of these would share a lock, log, or cron line,
+    and one alert would mark the other as sent.
+    """
+    config_path = config_path.resolve()
+    config = load_watch_config(config_path, require_cookies_file=False)
+    mine = {
+        "name": config["name"],
+        "cron_marker": config["cron_marker"],
+        "state_file": Path(config["state_file"]).resolve(),
+    }
+    problems: list[str] = []
+    for other_path in sorted(config_path.parent.glob("*.json")):
+        if other_path.resolve() == config_path or other_path.name == "config.example.json":
+            continue
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                other = load_watch_config(other_path, require_cookies_file=False)
+        except SystemExit:
+            continue
+        theirs = {
+            "name": other["name"],
+            "cron_marker": other["cron_marker"],
+            "state_file": Path(other["state_file"]).resolve(),
+        }
+        for key, value in mine.items():
+            if theirs[key] == value:
+                shown = value.relative_to(ROOT) if isinstance(value, Path) and value.is_relative_to(ROOT) else value
+                problems.append(f"{key} {shown} is also used by {other_path.name}")
+    return problems
 
 
 def import_beautifulsoup():
