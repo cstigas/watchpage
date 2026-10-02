@@ -12,12 +12,14 @@ import base64
 import http.cookiejar
 import json
 import os
+import random
 import re
 import shlex
 import socket
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -1148,6 +1150,40 @@ def _validate_schedule(schedule: str) -> str:
     return " ".join(fields)
 
 
+def max_jitter_seconds(schedule: str) -> int:
+    """Longest random delay that still lets a check finish before the next run.
+
+    The next run is skipped while flock is held, so the delay leaves ten
+    seconds of each interval for the check itself.
+    """
+    minute = _validate_schedule(schedule).split()[0]
+    if minute == "*":
+        return 50
+    step = re.fullmatch(r"\*/([0-9]+)", minute)
+    if step and int(step.group(1)) > 0:
+        return int(step.group(1)) * 60 - 10
+    return 600
+
+
+def _validate_jitter(schedule: str, jitter: int) -> int:
+    limit = max_jitter_seconds(schedule)
+    if isinstance(jitter, bool) or not isinstance(jitter, int) or not 0 <= jitter <= limit:
+        raise SystemExit(
+            f"The random delay must be 0 to {limit} seconds for this schedule, "
+            "so each check finishes before the next one starts."
+        )
+    return jitter
+
+
+def wait_jitter(seconds: int) -> None:
+    """Start a scheduled check at a random point in the next `seconds`."""
+    if seconds <= 0:
+        return
+    delay = random.uniform(0, seconds)
+    log(f"waiting {delay:.0f}s before the check")
+    time.sleep(delay)
+
+
 def _validate_cron_marker(marker: str) -> str:
     if not isinstance(marker, str):
         raise SystemExit("cron_marker must be one line and must not contain #")
@@ -1241,9 +1277,11 @@ def build_cron_line(
     name: str,
     marker: str,
     flock_bin: str | None,
+    jitter: int = 0,
 ) -> str:
     """One crontab line. The marker sits in the comment so it can be turned off."""
     schedule = _validate_schedule(schedule)
+    jitter = _validate_jitter(schedule, jitter)
     marker = _validate_cron_marker(marker)
     if not NAME_RE.fullmatch(name):
         raise SystemExit(
@@ -1268,6 +1306,8 @@ def build_cron_line(
             shlex.quote(_cron_safe_text(str(config_path))),
         ]
     )
+    if jitter:
+        command.extend(["--jitter", str(jitter)])
     quoted_log = shlex.quote(_cron_safe_text(str(log_path)))
     return f"{schedule} {' '.join(command)} >> {quoted_log} 2>&1 # {marker}"
 
@@ -1459,7 +1499,16 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="If the watch is triggered, send the alert without saving state or commenting out cron.",
     )
+    parser.add_argument(
+        "--jitter",
+        type=int,
+        default=0,
+        metavar="SECONDS",
+        help="Wait a random 0 to SECONDS before a scheduled check, so watches do not all start at once. Ignored by --dry-run and --test-sms.",
+    )
     args = parser.parse_args(argv)
+    if args.jitter < 0:
+        parser.error("--jitter must be 0 or more seconds")
     if args.import_cookies and (args.dry_run or args.test_sms or args.no_record):
         raise SystemExit(
             "--import-cookies cannot be combined with --dry-run, --test-sms, or --no-record"
@@ -1495,6 +1544,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_record and finish_if_complete(config, state):
         return 0
 
+    wait_jitter(args.jitter)
     body, problem = fetch_configured_page(config, save_cookies=True)
     if body is None:
         if args.no_record:
