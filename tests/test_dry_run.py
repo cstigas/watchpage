@@ -73,10 +73,12 @@ class DryRunTest(unittest.TestCase):
             else:
                 os.environ[key] = value
 
-    def run_dry(self):
+    def run_dry(self, *extra):
         stdout = StringIO()
         with redirect_stdout(stdout):
-            code = watchpage.main(["--config", str(self.config_path), "--dry-run"])
+            code = watchpage.main(
+                ["--config", str(self.config_path), "--dry-run", *extra]
+            )
         self.assertFalse(self.state_path.exists())
         return code, stdout.getvalue()
 
@@ -92,6 +94,28 @@ class DryRunTest(unittest.TestCase):
         code, output = self.run_dry()
         self.assertEqual(code, 0)
         self.assertIn("watch not triggered", output)
+        self.assertNotIn("looking for", output)
+
+    def test_verbose_explains_why_the_phrase_is_still_present(self):
+        self.page = "Summer concert tickets will be available. " * 20
+        code, output = self.run_dry("--verbose")
+        self.assertEqual(code, 0)
+        self.assertIn('looking for text "will be available" to be absent', output)
+        self.assertIn(
+            'page contains "will be available", so the alert does not match',
+            output,
+        )
+        self.assertLess(output.index("looking for"), output.index("watch not triggered"))
+
+    def test_verbose_explains_why_an_absent_phrase_matches(self):
+        self.page = "Summer concert tickets are on sale now. " * 20
+        code, output = self.run_dry("-v")
+        self.assertEqual(code, 0)
+        self.assertIn(
+            'page does not contain "will be available", so the alert matches',
+            output,
+        )
+        self.assertIn("watch triggered", output)
 
     def test_not_checked_when_fetch_fails(self):
         code, output = self.run_dry()
