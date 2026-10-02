@@ -1027,17 +1027,131 @@ def json_text(value: object) -> str:
     return value if isinstance(value, str) else json.dumps(value)
 
 
+def css_matches(body: str, selector: str) -> list[object]:
+    beautiful_soup = import_beautifulsoup()
+    try:
+        return beautiful_soup(body, "html.parser").select(selector)
+    except Exception as exc:
+        raise SystemExit(f"Invalid CSS selector {selector!r}: {exc}") from exc
+
+
 def page_matches(body: str, watch: dict[str, str]) -> bool:
     kind = watch["kind"]
     value = watch["value"]
     if kind == "text":
         return value.casefold() in body.casefold()
-    beautiful_soup = import_beautifulsoup()
-    try:
-        found = beautiful_soup(body, "html.parser").select(value)
-    except Exception as exc:
-        raise SystemExit(f"Invalid CSS selector {value!r}: {exc}") from exc
-    return bool(found)
+    return bool(css_matches(body, value))
+
+
+def quoted(text: str) -> str:
+    return json.dumps(text)
+
+
+def criterion_text(config: dict[str, object]) -> str:
+    """The value this watch is waiting on."""
+    watch = config["watch"]
+    if not isinstance(watch, dict):
+        raise SystemExit("Config watch must be an object.")
+    kind = str(watch["kind"])
+    value = quoted(str(watch["value"]))
+    if kind == "json":
+        path = watch["path"]
+        if watch["alert_when"] == "present":
+            return f"looking for JSON {path} to be {value}"
+        return f"looking for JSON {path} to not be {value}"
+    state = "present" if watch["alert_when"] == "present" else "absent"
+    if kind == "css":
+        return f"looking for CSS selector {value} to be {state}"
+    return f"looking for text {value} to be {state}"
+
+
+def shown_json(value: object) -> str:
+    text = json_text(value)
+    if len(text) > 80:
+        text = text[:77] + "..."
+    return json.dumps(text)
+
+
+def shown_json_list(values: list[object]) -> str:
+    head = [shown_json(item) for item in values[:3]]
+    text = ", ".join(head)
+    extra = len(values) - len(head)
+    if extra:
+        text += f" and {extra} more"
+    return text
+
+
+def alert_because(found: str, *, matched: bool, alert_when: str) -> str:
+    """Say whether the finding meets alert_when."""
+    meets = matched if alert_when == "present" else not matched
+    if meets:
+        return f"{found}, so the alert matches"
+    return f"{found}, so the alert does not match"
+
+
+def json_comparison(body: str, watch: dict[str, str]) -> str:
+    path = watch["path"]
+    wanted = watch["value"]
+    alert_when = watch["alert_when"]
+    parsed, values = json_values(body, watch)
+    if not parsed:
+        return (
+            f"body is not JSON, so there is no value at {path} "
+            "and the alert was not checked"
+        )
+    if not values:
+        if alert_when == "absent":
+            return f"nothing at {path}, so an absent alert was not checked"
+        return f"nothing at {path}, so the alert does not match"
+    shown = shown_json_list(values)
+    matched = any(json_text(item).casefold() == wanted.casefold() for item in values)
+    if len(values) == 1 and matched:
+        found = f"{path} is {shown}"
+    elif len(values) == 1:
+        found = f"{path} is {shown}, not {quoted(wanted)}"
+    elif matched:
+        found = f"{path} includes {quoted(wanted)} ({shown})"
+    else:
+        found = f"{path} is {shown}, not {quoted(wanted)}"
+    return alert_because(found, matched=matched, alert_when=alert_when)
+
+
+def comparison_text(body: str, config: dict[str, object]) -> str:
+    """Why the page met or missed the alert."""
+    must = str(config.get("must_contain") or "")
+    if must and must.casefold() not in body.casefold():
+        return f"page does not contain {quoted(must)}, so the alert was not checked"
+    watch = config["watch"]
+    if not isinstance(watch, dict):
+        raise SystemExit("Config watch must be an object.")
+    if watch["kind"] == "json":
+        return json_comparison(body, watch)
+    value = str(watch["value"])
+    alert_when = str(watch["alert_when"])
+    if watch["kind"] == "css":
+        count = len(css_matches(body, value))
+        noun = "element" if count == 1 else "elements"
+        found = f"selector {quoted(value)} matched {count} {noun}"
+        return alert_because(found, matched=count > 0, alert_when=alert_when)
+    matched = value.casefold() in body.casefold()
+    if matched:
+        found = f"page contains {quoted(value)}"
+    else:
+        found = f"page does not contain {quoted(value)}"
+    return alert_because(found, matched=matched, alert_when=alert_when)
+
+
+def watch_detail(body: str | None, config: dict[str, object]) -> list[str]:
+    """Verbose lines: the watched value, then why it did or did not match."""
+    lines = [criterion_text(config)]
+    if body is not None:
+        lines.append(comparison_text(body, config))
+    return lines
+
+
+def log_watch_detail(body: str | None, config: dict[str, object]) -> None:
+    for line in watch_detail(body, config):
+        log(line)
 
 
 def classify_page(body: str, config: dict[str, object]) -> str:
@@ -1469,9 +1583,11 @@ def send_pending(
     return 0
 
 
-def run_dry(config: dict[str, object]) -> int:
+def run_dry(config: dict[str, object], *, verbose: bool = False) -> int:
     body, problem = fetch_configured_page(config, save_cookies=False)
     outcome, detail = assess(body, problem, config)
+    if verbose:
+        log_watch_detail(body, config)
     if outcome == "not_checked":
         log(f"watch not checked: {detail}")
         return 1
@@ -1566,6 +1682,12 @@ def main(argv: list[str] | None = None) -> int:
         metavar="SECONDS",
         help="Wait a random 0 to SECONDS before a scheduled check, so watches do not all start at once. Ignored by --dry-run and --test-sms.",
     )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Log the value the watch is looking for, and why the alert matched or did not.",
+    )
     args = parser.parse_args(argv)
     if args.jitter < 0:
         parser.error("--jitter must be 0 or more seconds")
@@ -1589,7 +1711,7 @@ def main(argv: list[str] | None = None) -> int:
     STATE_PATH = Path(watch_config["state_file"])
 
     if args.dry_run:
-        return run_dry(watch_config)
+        return run_dry(watch_config, verbose=args.verbose)
 
     warn_config()
     config = load_config()
@@ -1606,6 +1728,8 @@ def main(argv: list[str] | None = None) -> int:
 
     wait_jitter(args.jitter)
     body, problem = fetch_configured_page(config, save_cookies=True)
+    if args.verbose:
+        log_watch_detail(body, config)
     if body is None:
         if args.no_record:
             return 0

@@ -144,3 +144,61 @@ class ClassifyJsonTest(unittest.TestCase):
             watchpage.assess(self.STOCK, None, config),
             ("not_checked", "no JSON value at stock.status"),
         )
+
+    def test_verbose_detail_explains_a_json_miss(self):
+        body = '{"isAvailable": false, "itemNumber": "2600511"}'
+        config = json_config("isAvailable", "true", must_contain="2600511")
+        self.assertEqual(
+            watchpage.watch_detail(body, config),
+            [
+                'looking for JSON isAvailable to be "true"',
+                'isAvailable is "false", not "true", so the alert does not match',
+            ],
+        )
+
+    def test_verbose_detail_explains_a_json_match_and_a_missing_path(self):
+        config = json_config("isAvailable", "true", must_contain="2022293")
+        self.assertEqual(
+            watchpage.watch_detail(self.STOCK, config)[1],
+            'isAvailable is "true", so the alert matches',
+        )
+        missing = json_config(
+            "warehouseAvailability.inWarehouse.availability", "INSTOCK"
+        )
+        body = '{"itemNumber": "2600511", "warehouseAvailability": {}}'
+        self.assertEqual(
+            watchpage.watch_detail(body, missing)[1],
+            "nothing at warehouseAvailability.inWarehouse.availability, "
+            "so the alert does not match",
+        )
+        absent = json_config("stock.status", "sold out", "absent")
+        self.assertEqual(
+            watchpage.watch_detail(self.STOCK, absent)[1],
+            "nothing at stock.status, so an absent alert was not checked",
+        )
+
+    def test_verbose_detail_explains_text_css_and_must_contain(self):
+        waiting = watch_config("text", "add to cart", "present")
+        self.assertEqual(
+            watchpage.watch_detail("Sold out for the season.", waiting),
+            [
+                'looking for text "add to cart" to be present',
+                'page does not contain "add to cart", so the alert does not match',
+            ],
+        )
+        css = watch_config("css", ".sold-out", "absent")
+        body = '<html><body><p class="sold-out">Sold out</p></body></html>'
+        self.assertEqual(
+            watchpage.watch_detail(body, css)[1],
+            'selector ".sold-out" matched 1 element, so the alert does not match',
+        )
+        gated = watch_config("text", "will be available", "absent", "summer concert")
+        page = "This parking page does not mention the event."
+        self.assertEqual(
+            watchpage.watch_detail(page, gated)[1],
+            'page does not contain "summer concert", so the alert was not checked',
+        )
+        self.assertEqual(
+            watchpage.watch_detail(None, waiting),
+            ['looking for text "add to cart" to be present'],
+        )
